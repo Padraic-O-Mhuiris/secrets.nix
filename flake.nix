@@ -25,6 +25,28 @@
         pkgs,
         ...
       }: {
+        packages.findProjectRoot = pkgs.writeShellApplication {
+          name = "find-project-root";
+          text = ''
+            find_up() {
+              ancestors=()
+              while true; do
+                if [[ -f $1 ]]; then
+                  echo "$PWD"
+                  exit 0
+                fi
+                ancestors+=("$PWD")
+                if [[ $PWD == / ]] || [[ $PWD == // ]]; then
+                  echo "ERROR: Unable to locate $1 in any of: ''${ancestors[*]@Q}" >&2
+                  exit 1
+                fi
+                cd ..
+              done
+            }
+            find_up "flake.nix"
+          '';
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [pkgs.alejandra pkgs.sops pkgs.age];
         };
