@@ -1,5 +1,5 @@
 {
-  description = "Description for the project";
+  description = "Declarative SOPS secrets management with flake-parts";
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
@@ -12,9 +12,12 @@
       systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
       perSystem = {pkgs, ...}: {
         devShells.default = pkgs.mkShell {
-          packages = [pkgs.alejandra];
+          packages = [pkgs.alejandra pkgs.sops pkgs.age];
         };
       };
-      flake = {};
+      flake = {
+        flakeModules.default = ./flake-module.nix;
+        flakeModule = ./flake-module.nix;
+      };
     };
 }
