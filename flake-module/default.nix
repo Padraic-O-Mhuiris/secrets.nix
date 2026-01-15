@@ -3,6 +3,11 @@
   flake-parts-lib,
   ...
 }: let
+  packagesModule = import ./packages.nix {inherit flake;};
+in {
+  imports = [packagesModule];
+}
+// (let
   inherit (lib) mkOption types;
   inherit (flake-parts-lib) mkSubmoduleOptions;
 
@@ -77,4 +82,4 @@ in {
       '';
     };
   };
-}
+})
