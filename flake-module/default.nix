@@ -1,4 +1,4 @@
-{...}: {
+{flake}: {
   lib,
   flake-parts-lib,
   ...
@@ -46,12 +46,17 @@
         description = "Key definitions";
       };
 
-      # Computed path based on section name (e.g., "dev" -> "secrets/dev")
-      _path = mkOption {
-        type = types.str;
+      # Bash snippet that sets $workdir to this secrets section directory
+      _workdir = mkOption {
+        type = types.lines;
         internal = true;
-        default = "secrets/${name}";
-        description = "Computed path for this secrets section";
+        readOnly = true;
+        default = flake.lib.buildWorkdirScript (
+          if name == "default"
+          then "secrets"
+          else "secrets/${name}"
+        );
+        description = "Bash snippet that sets $workdir to this secrets section directory";
       };
     };
   });
