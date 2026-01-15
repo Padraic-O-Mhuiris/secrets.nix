@@ -13,7 +13,8 @@
     ...
   }:
     flake-parts.lib.mkFlake {inherit inputs;} ({flake-parts-lib, ...}: let
-      flake-module = flake-parts-lib.importApply ./flake-module self;
+      flake-module = flake-parts-lib.importApply ./flake-module {flake = self;};
+      lib = import ./lib {inherit (inputs.nixpkgs) lib;};
     in {
       imports = [
         flake-module
@@ -25,34 +26,12 @@
         pkgs,
         ...
       }: {
-        packages.findProjectRoot = pkgs.writeShellApplication {
-          name = "find-project-root";
-          text = ''
-            find_up() {
-              ancestors=()
-              while true; do
-                if [[ -f $1 ]]; then
-                  echo "$PWD"
-                  exit 0
-                fi
-                ancestors+=("$PWD")
-                if [[ $PWD == / ]] || [[ $PWD == // ]]; then
-                  echo "ERROR: Unable to locate $1 in any of: ''${ancestors[*]@Q}" >&2
-                  exit 1
-                fi
-                cd ..
-              done
-            }
-            find_up "flake.nix"
-          '';
-        };
-
         devShells.default = pkgs.mkShell {
           packages = [pkgs.alejandra pkgs.sops pkgs.age];
         };
       };
       flake = rec {
-        inherit flake-module;
+        inherit flake-module lib;
         flakeModules.default = flake-module;
       };
     });

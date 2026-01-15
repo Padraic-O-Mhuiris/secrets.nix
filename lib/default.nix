@@ -1,0 +1,3 @@
+{...}: {
+  snippets = import ./snippets.nix;
+}
