@@ -1,6 +1,6 @@
 # Example usage of the secrets flake-module
 {...}: {
-  flake.secrets.keys = {
+  flake.secrets.example.keys = {
     admins = [
       {
         name = "alice";
