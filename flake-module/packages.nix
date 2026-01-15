@@ -30,8 +30,8 @@
 
   # Build a group info package that displays metadata
   mkGroupPackage = groupName: secretsConfig: pkgs: let
-    adminKeys = map (k: k.name) secretsConfig.keys.admins;
-    targetKeys = map (k: k.name) secretsConfig.keys.targets;
+    adminRecipients = map (k: k.name) secretsConfig.recipients.admins;
+    targetRecipients = map (k: k.name) secretsConfig.recipients.targets;
     commands = mkGroupCommands groupName secretsConfig pkgs;
 
     base = pkgs.writeShellApplication {
@@ -42,8 +42,8 @@
         echo ""
         echo "Workdir: $workdir"
         echo ""
-        echo "Admin keys: ${if adminKeys == [] then "(none)" else concatStringsSep ", " adminKeys}"
-        echo "Target keys: ${if targetKeys == [] then "(none)" else concatStringsSep ", " targetKeys}"
+        echo "Admin recipients: ${if adminRecipients == [] then "(none)" else concatStringsSep ", " adminRecipients}"
+        echo "Target recipients: ${if targetRecipients == [] then "(none)" else concatStringsSep ", " targetRecipients}"
         echo ""
         echo "Available commands:"
         ${concatMapStringsSep "\n" (cmd: ''echo "  nix run .#secrets.${groupName}.${cmd}"'') commandNames}
