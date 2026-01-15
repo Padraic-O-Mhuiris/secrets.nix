@@ -1,0 +1,14 @@
+[[language]]
+name = "nix"
+auto-format = true
+formatter = { command = "alejandra" }
+
+[[language]]
+name = "hcl"
+auto-format = true
+formatter = { command = "tofu", args = ["fmt", "-"] }
+
+[[language]]
+name = "tfvars"
+auto-format = true
+formatter = { command = "tofu", args = ["fmt", "-"] }

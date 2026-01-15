@@ -1,0 +1,13 @@
+.direnv
+.pre-commit-config.yaml
+result
+*.qcow2
+
+profiles/ai/claude/shell-snapshots
+profiles/ai/claude/plugins
+profiles/ai/claude/todos
+profiles/ai/claude/projects
+profiles/ai/claude/*.jsonl
+
+# Hide git objects for claude code
+.git
