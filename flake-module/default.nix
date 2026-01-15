@@ -27,7 +27,7 @@ in {
     };
   };
 
-  keysType = types.submodule {
+  recipientsType = types.submodule {
     options = {
       admins = mkOption {
         type = types.listOf keyType;
@@ -42,13 +42,13 @@ in {
     };
   };
 
-  # Base secrets configuration (keys + future secret definitions)
+  # Base secrets configuration (recipients + secret definitions)
   secretsType = types.submodule ({name, ...}: {
     options = {
-      keys = mkOption {
-        type = keysType;
+      recipients = mkOption {
+        type = recipientsType;
         default = {};
-        description = "Key definitions";
+        description = "Age recipient keys for encryption";
       };
 
       # Bash snippet that sets $workdir to this secrets section directory
