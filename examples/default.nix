@@ -1,6 +1,6 @@
 # Example usage of the secrets flake-module
-{...}: {
-  flake.secrets.example.recipients = {
+{...}: let
+  recipients = {
     admins = [
       {
         name = "alice";
@@ -26,5 +26,12 @@
         key = "age1f6ulfp8qstfgm8e3lxrprcwz5ml3c338t3h5pvfrp7dtmr4g6sfs5fx20n";
       }
     ];
+  };
+in {
+  flake.secrets.example = {
+    inherit recipients;
+    secret.my-api-key = {
+      targets = ["laptop"];
+    };
   };
 }

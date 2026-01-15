@@ -42,13 +42,46 @@ in {
     };
   };
 
+  # Individual secret definition - takes group config for recipient resolution
+  mkSecretType = groupConfig:
+    types.submodule ({config, ...}: {
+      options = {
+        # User-specified targets (by name) for this secret
+        targets = mkOption {
+          type = types.listOf types.str;
+          default = [];
+          description = "Target recipient names to include for this secret";
+        };
+
+        # Computed: all recipients (admins + selected targets)
+        _recipients = mkOption {
+          type = types.listOf keyType;
+          internal = true;
+          readOnly = true;
+          default = let
+            admins = groupConfig.recipients.admins;
+            allTargets = groupConfig.recipients.targets;
+            selectedTargets = builtins.filter (t: builtins.elem t.name config.targets) allTargets;
+          in
+            admins ++ selectedTargets;
+          description = "Computed list of all recipients (admins + selected targets)";
+        };
+      };
+    });
+
   # Base secrets configuration (recipients + secret definitions)
-  secretsType = types.submodule ({name, ...}: {
+  secretsGroupType = types.submodule ({name, config, ...}: {
     options = {
       recipients = mkOption {
         type = recipientsType;
         default = {};
         description = "Age recipient keys for encryption";
+      };
+
+      secret = mkOption {
+        type = types.attrsOf (mkSecretType config);
+        default = {};
+        description = "Secret definitions for this group";
       };
 
       # Bash snippet that sets $workdir to this secrets section directory
@@ -68,17 +101,20 @@ in {
 in {
   options.flake = mkSubmoduleOptions {
     secrets = mkOption {
-      type = types.attrsOf secretsType;
+      type = types.attrsOf secretsGroupType;
       default = {};
       description = ''
         Secrets management configuration.
 
-        Each attribute defines a secrets section stored in `secrets/<name>/`.
-        For a single scope, use `default` as the name → `secrets/default/`.
+        Each attribute defines a secrets group stored in `secrets/<name>/`.
+        For a single scope, use `default` as the name → `secrets/`.
 
         Example:
-          secrets.dev = { keys.targets = [...]; };      # secrets/dev/
-          secrets.production = { keys.targets = [...]; }; # secrets/production/
+          secrets.dev = {
+            recipients.targets = [...];
+            secret.apiKey = {};
+            secret.dbPassword = {};
+          };
       '';
     };
   };
