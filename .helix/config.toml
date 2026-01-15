@@ -1,0 +1,5 @@
+[editor.file-picker]
+# Don't use .gitignore to filter files in the picker
+git-ignore = false
+# Show hidden files
+hidden = false
