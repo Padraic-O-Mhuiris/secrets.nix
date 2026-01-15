@@ -22,34 +22,54 @@
     };
   };
 
-  keysOptions = mkOption {
-    type = types.submodule {
-      options = {
-        admins = mkOption {
-          type = types.listOf keyType;
-          default = [];
-          description = "Admin keys - included in all secrets for management";
-        };
-        targets = mkOption {
-          type = types.listOf keyType;
-          default = [];
-          description = "Target keys - referenced per-secret for runtime decryption";
-        };
+  keysType = types.submodule {
+    options = {
+      admins = mkOption {
+        type = types.listOf keyType;
+        default = [];
+        description = "Admin keys - included in all secrets for management";
+      };
+      targets = mkOption {
+        type = types.listOf keyType;
+        default = [];
+        description = "Target keys - referenced per-secret for runtime decryption";
       };
     };
-    default = {};
-    description = "Key definitions";
   };
-in {
-  options = {
-    flake = mkSubmoduleOptions {
-      secrets = mkOption {
-        type = types.submodule {
-          options.keys = keysOptions;
-        };
+
+  # Base secrets configuration (keys + future secret definitions)
+  secretsType = types.submodule ({name, ...}: {
+    options = {
+      keys = mkOption {
+        type = keysType;
         default = {};
-        description = "Secrets management configuration";
+        description = "Key definitions";
       };
+
+      # Computed path based on section name (e.g., "dev" -> "secrets/dev")
+      _path = mkOption {
+        type = types.str;
+        internal = true;
+        default = "secrets/${name}";
+        description = "Computed path for this secrets section";
+      };
+    };
+  });
+in {
+  options.flake = mkSubmoduleOptions {
+    secrets = mkOption {
+      type = types.attrsOf secretsType;
+      default = {};
+      description = ''
+        Secrets management configuration.
+
+        Each attribute defines a secrets section stored in `secrets/<name>/`.
+        For a single scope, use `default` as the name → `secrets/default/`.
+
+        Example:
+          secrets.dev = { keys.targets = [...]; };      # secrets/dev/
+          secrets.production = { keys.targets = [...]; }; # secrets/production/
+      '';
     };
   };
 }
