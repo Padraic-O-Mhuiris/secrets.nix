@@ -1,5 +1,5 @@
 # Example usage of the secrets flake-module
-{
+{...}: {
   flake.secrets.keys = {
     admins = [
       {
