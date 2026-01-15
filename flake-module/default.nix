@@ -57,10 +57,16 @@ in {
         };
 
         # User-specified targets (by name) for this secret
+        # Use ["*"] to include all targets
         targets = mkOption {
-          type = types.listOf (types.enum targetNames);
+          type = types.addCheck
+            (types.listOf (types.enum (targetNames ++ ["*"])))
+            (list: !(builtins.elem "*" list) || list == ["*"]);
           default = [];
-          description = "Target recipient names to include for this secret";
+          description = ''
+            Target recipient names to include for this secret.
+            Use ["*"] to include all targets (must be the only element).
+          '';
         };
 
         # Computed: all recipients (selected admins + selected targets)
@@ -72,7 +78,10 @@ in {
             allAdmins = groupConfig.recipients.admins;
             allTargets = groupConfig.recipients.targets;
             selectedAdmins = builtins.filter (a: builtins.elem a.name config.admins) allAdmins;
-            selectedTargets = builtins.filter (t: builtins.elem t.name config.targets) allTargets;
+            selectedTargets =
+              if builtins.elem "*" config.targets
+              then allTargets
+              else builtins.filter (t: builtins.elem t.name config.targets) allTargets;
           in
             selectedAdmins ++ selectedTargets;
           description = "Computed list of all recipients (selected admins + selected targets)";
