@@ -1,7 +1,5 @@
 # Example usage of the secrets flake-module
 {
-  imports = [../flake-module.nix];
-
   flake.secrets.keys = {
     admins = [
       {
