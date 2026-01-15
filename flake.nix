@@ -19,7 +19,7 @@
         flake-module
         ./examples
       ];
-      systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
+      systems = inputs.nixpkgs.lib.systems.flakeExposed;
       perSystem = {
         config,
         pkgs,
