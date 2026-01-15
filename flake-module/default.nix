@@ -21,31 +21,31 @@
       };
     };
   };
+
+  keysOptions = mkOption {
+    type = types.submodule {
+      options = {
+        admins = mkOption {
+          type = types.listOf keyType;
+          default = [];
+          description = "Admin keys - included in all secrets for management";
+        };
+        targets = mkOption {
+          type = types.listOf keyType;
+          default = [];
+          description = "Target keys - referenced per-secret for runtime decryption";
+        };
+      };
+    };
+    default = {};
+    description = "Key definitions";
+  };
 in {
   options = {
     flake = mkSubmoduleOptions {
       secrets = mkOption {
         type = types.submodule {
-          options = {
-            keys = mkOption {
-              type = types.submodule {
-                options = {
-                  admins = mkOption {
-                    type = types.listOf keyType;
-                    default = [];
-                    description = "Admin keys - included in all secrets for management";
-                  };
-                  targets = mkOption {
-                    type = types.listOf keyType;
-                    default = [];
-                    description = "Target keys - referenced per-secret for runtime decryption";
-                  };
-                };
-              };
-              default = {};
-              description = "Key definitions";
-            };
-          };
+          options.keys = keysOptions;
         };
         default = {};
         description = "Secrets management configuration";
