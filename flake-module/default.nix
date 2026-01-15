@@ -43,28 +43,39 @@ in {
   };
 
   # Individual secret definition - takes group config for recipient resolution
-  mkSecretType = groupConfig:
+  mkSecretType = groupConfig: let
+    adminNames = map (a: a.name) groupConfig.recipients.admins;
+    targetNames = map (t: t.name) groupConfig.recipients.targets;
+  in
     types.submodule ({config, ...}: {
       options = {
+        # User-specified admins (by name) for this secret - defaults to all
+        admins = mkOption {
+          type = types.listOf (types.enum adminNames);
+          default = adminNames;
+          description = "Admin recipient names to include for this secret (defaults to all)";
+        };
+
         # User-specified targets (by name) for this secret
         targets = mkOption {
-          type = types.listOf types.str;
+          type = types.listOf (types.enum targetNames);
           default = [];
           description = "Target recipient names to include for this secret";
         };
 
-        # Computed: all recipients (admins + selected targets)
+        # Computed: all recipients (selected admins + selected targets)
         _recipients = mkOption {
           type = types.listOf keyType;
           internal = true;
           readOnly = true;
           default = let
-            admins = groupConfig.recipients.admins;
+            allAdmins = groupConfig.recipients.admins;
             allTargets = groupConfig.recipients.targets;
+            selectedAdmins = builtins.filter (a: builtins.elem a.name config.admins) allAdmins;
             selectedTargets = builtins.filter (t: builtins.elem t.name config.targets) allTargets;
           in
-            admins ++ selectedTargets;
-          description = "Computed list of all recipients (admins + selected targets)";
+            selectedAdmins ++ selectedTargets;
+          description = "Computed list of all recipients (selected admins + selected targets)";
         };
       };
     });
