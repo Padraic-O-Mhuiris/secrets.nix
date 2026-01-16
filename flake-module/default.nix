@@ -43,11 +43,20 @@ in {
   };
 
   # Individual secret definition - takes group config for recipient resolution
-  mkSecretType = groupConfig: let
+  mkSecretType = groupName: groupConfig: let
     adminNames = map (a: a.name) groupConfig.recipients.admins;
     targetNames = map (t: t.name) groupConfig.recipients.targets;
+    # Path prefix for this group's secrets
+    pathPrefix =
+      if groupName == "default"
+      then "secrets"
+      else "secrets/${groupName}";
   in
-    types.submodule ({config, ...}: {
+    types.submodule ({
+      name,
+      config,
+      ...
+    }: {
       options = {
         # User-specified admins (by name) for this secret - defaults to all
         admins = mkOption {
@@ -86,6 +95,30 @@ in {
             selectedAdmins ++ selectedTargets;
           description = "Computed list of all recipients (selected admins + selected targets)";
         };
+
+        # SOPS creation rule for this secret
+        _creationRule = mkOption {
+          type = types.lines;
+          internal = true;
+          readOnly = true;
+          default = let
+            # Escape dots and special chars for regex
+            escapedPath = builtins.replaceStrings ["."] ["\\."] "${pathPrefix}/${name}";
+            allAdmins = groupConfig.recipients.admins;
+            allTargets = groupConfig.recipients.targets;
+            selectedAdmins = builtins.filter (a: builtins.elem a.name config.admins) allAdmins;
+            selectedTargets =
+              if builtins.elem "*" config.targets
+              then allTargets
+              else builtins.filter (t: builtins.elem t.name config.targets) allTargets;
+            adminKeys = map (r: "      - ${r.key}  # ${r.name} (admin)") selectedAdmins;
+            targetKeys = map (r: "      - ${r.key}  # ${r.name} (target)") selectedTargets;
+          in ''
+            - path_regex: ${escapedPath}\.yaml$
+              age:
+            ${builtins.concatStringsSep "\n" (adminKeys ++ targetKeys)}'';
+          description = "SOPS creation rule YAML fragment for this secret";
+        };
       };
     });
 
@@ -99,7 +132,7 @@ in {
       };
 
       secret = mkOption {
-        type = types.attrsOf (mkSecretType config);
+        type = types.attrsOf (mkSecretType name config);
         default = {};
         description = "Secret definitions for this group";
       };
