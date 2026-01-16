@@ -80,6 +80,15 @@ in {
           description = "Nix store path to the encrypted secret file";
         };
 
+        # Whether the secret file exists
+        _exists = mkOption {
+          type = types.bool;
+          internal = true;
+          readOnly = true;
+          default = builtins.pathExists (self + "/${config._relPath}");
+          description = "Whether the encrypted secret file exists";
+        };
+
         # SOPS creation rule for this secret
         _creationRule = mkOption {
           type = types.lines;
