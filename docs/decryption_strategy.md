@@ -366,3 +366,99 @@ This is left to future work. For most use cases, single-key decryption is suffic
 | Remote execution | Works naturally | Needs remote key access |
 
 The core insight: **decryption configuration is per-recipient metadata that describes key acquisition, not key storage**. The flake author decides *who* can decrypt. The user/deployer decides *how* their key is accessed.
+
+## Recipient Resolution via Public Key Derivation
+
+When multiple recipients exist for a secret, the decrypt script needs to determine which recipient the user's key corresponds to. Rather than guessing or trying each recipient sequentially, we can validate membership upfront.
+
+### The Approach
+
+1. Embed a lookup table of public keys → recipient names at build time
+2. At runtime, derive the public key from the provided private key
+3. Look up the public key in the table to identify the recipient
+4. Only then attempt decryption
+
+### Implementation
+
+```bash
+# Embedded at build time from recipient definitions
+declare -A recipients=(
+  ["age1adminpublickey..."]="admin"
+  ["age1server1publickey..."]="server1"
+)
+declare -a env_vars=("ADMIN__DECRYPT_CMD" "SERVER1__DECRYPT_CMD")
+
+# Find first set env var
+decrypt_cmd=""
+for var in "${env_vars[@]}"; do
+  if [[ -n "${!var:-}" ]]; then
+    decrypt_cmd="${!var}"
+    break
+  fi
+done
+
+if [[ -z "$decrypt_cmd" ]]; then
+  echo "Error: no decrypt command set" >&2
+  echo "Set one of: ${env_vars[*]}" >&2
+  exit 1
+fi
+
+# Validate and decrypt in contained scope
+eval "$decrypt_cmd" | {
+  read -r private_key
+  public_key=$(echo "$private_key" | age-keygen -y)
+
+  # Validate membership
+  if [[ -z "${recipients[$public_key]:-}" ]]; then
+    echo "Error: provided key is not a recipient of this secret" >&2
+    echo "Expected one of:" >&2
+    for pk in "${!recipients[@]}"; do
+      echo "  ${recipients[$pk]}: ${pk:0:20}..." >&2
+    done
+    exit 1
+  fi
+
+  recipient_name="${recipients[$public_key]}"
+  echo "Decrypting as: $recipient_name" >&2
+
+  # Decrypt
+  echo "$private_key" | sops -d --age-key-file /dev/stdin "$secret_path"
+}
+status=$?
+
+# Cleanup - unset all decrypt env vars to prevent leakage
+for var in "${env_vars[@]}"; do
+  unset "$var"
+done
+
+exit $status
+```
+
+The script:
+1. Checks all recipient env vars, uses first one found
+2. Derives public key and validates membership
+3. Decrypts only if validation passes
+4. Unsets all decrypt env vars post-decryption to prevent leakage in the shell session
+
+### Benefits
+
+- **Fail fast**: wrong key detected before hitting sops
+- **Clear errors**: "Your key matches recipient 'admin'" or "Your key doesn't match any recipient"
+- **No guessing**: when trying multiple recipients, you know exactly which one applies
+- **Validation**: confirms the user has a legitimate key for this secret, not just any age key
+
+### Limitations
+
+This approach requires that a public identity is derivable from the private key output. This works for:
+
+- **age**: `age-keygen -y` derives public key from private
+- **age with SSH keys**: `ssh-to-age` can derive the age public key
+
+This may not be available for other sops backends:
+
+- **AWS KMS**: no local private key exists; decryption is an API call
+- **GCP KMS**: same - key lives in cloud HSM
+- **Azure Key Vault**: same
+- **PGP**: possible via `gpg --list-keys` but more complex
+
+For non-age backends, the validation step would need to be skipped or use a different mechanism (e.g., check if the user has the required IAM permissions before attempting decryption).
