@@ -14,13 +14,34 @@ in {
   # Age public key regex pattern
   ageKeyPattern = "age1[a-z0-9]{58}";
 
+  # Directory path type - must not end with file extension
+  dirType = types.addCheck types.str (s:
+    let lastSegment = builtins.baseNameOf s;
+    in !(builtins.match ".*\\.[a-zA-Z0-9]+$" lastSegment != null)
+  ) // { description = "directory path (no file extension)"; };
+
+  # File type options
+  fileType = types.submodule ({...}: {
+    options = {
+      dir = mkOption {
+        type = dirType;
+        description = "Directory path (relative to flake root, no file extension)";
+      };
+      type = mkOption {
+        type = types.enum ["yaml" "json"];
+        default = "yaml";
+        description = "File format for the secret";
+      };
+    };
+  });
+
   # Secret type - each secret has its own recipients and path
   mkSecretType = groupName:
     types.submodule ({name, config, ...}: let
-      defaultPath =
+      defaultDir =
         if groupName == "default"
-        then "secrets/${name}.yaml"
-        else "secrets/${groupName}/${name}.yaml";
+        then "secrets"
+        else "secrets/${groupName}";
     in {
       options = {
         # Recipients as attrset: { alice = "age1..."; server1 = "age1..."; }
@@ -30,11 +51,23 @@ in {
           description = "Recipients who can decrypt this secret (name = age public key)";
         };
 
-        # Path to the secret file (relative to flake root)
-        path = mkOption {
+        # File location settings
+        file = mkOption {
+          type = fileType;
+          default = {
+            dir = defaultDir;
+            type = "yaml";
+          };
+          description = "File location and format settings";
+        };
+
+        # Computed full path to the secret file
+        _path = mkOption {
           type = types.str;
-          default = defaultPath;
-          description = "Path to the encrypted secret file (relative to flake root)";
+          internal = true;
+          readOnly = true;
+          default = "${config.file.dir}/${name}.${config.file.type}";
+          description = "Full path to the encrypted secret file";
         };
 
         # SOPS creation rule for this secret
@@ -44,7 +77,7 @@ in {
           readOnly = true;
           default = let
             # Escape dots and special chars for regex
-            escapedPath = builtins.replaceStrings ["." "/"] ["\\." "\\/"] config.path;
+            escapedPath = builtins.replaceStrings ["." "/"] ["\\." "\\/"] config._path;
             ageKeys = mapAttrsToList (n: k: "      - ${k}  # ${n}") config.recipients;
           in ''
             - path_regex: ${escapedPath}$
