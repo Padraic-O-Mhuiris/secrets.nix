@@ -193,3 +193,65 @@ agenix, sops-nix - the standard "encrypted secrets in git" model for NixOS
 - Secrets requiring instant revocation
 - Highly regulated environments needing full audit trails
 - Secrets that must remain confidential for decades (post-quantum concern)
+
+## Practical Risk Assessment
+
+### How Alarming Is the Threat Model?
+
+Honestly? Not very, for most use cases.
+
+sops-nix, agenix, and similar tools are widely used in the NixOS community. The "secrets in git" model is the de facto standard because:
+
+1. **The threat is theoretical for most teams** - It requires:
+   - A key compromise (already a bad day)
+   - AND attacker having repo access (or it going public)
+   - AND historical secrets still being valuable
+
+2. **Practical mitigations exist** - Rotate secrets periodically, and the historical exposure becomes "old passwords that no longer work"
+
+3. **The alternative is significantly more complex** - Remote storage, sync tooling, credential management for the storage layer... all for a marginal security improvement
+
+4. **Real-world breaches rarely come from git history** - They come from leaked `.env` files, hardcoded credentials, misconfigured S3 buckets, phishing, etc.
+
+### Why Keep Secrets in the Repo?
+
+Storing encrypted secrets in the repository has significant practical benefits for Nix workflows:
+
+```nix
+# This just works when secrets are in the repo:
+nixosConfigurations.server1 = {
+  sops.secrets.api-key.sopsFile = ./secrets/production/api-key.yaml;
+};
+
+# With remote storage, you'd need:
+# 1. Fetch from S3 at build time? (impure, breaks Nix model)
+# 2. Fetch at activation time? (delays boot, needs credentials on target)
+# 3. Pre-fetch and vendor? (back to storing in repo anyway)
+```
+
+The Nix model wants deterministic, pure builds. Encrypted files in the repo are:
+
+- Always available at eval time
+- Packaged into closures naturally
+- No runtime dependencies on external services
+
+### Realistic Stance
+
+Keep secrets in the repo. Accept that:
+
+1. **Compromised key = rotate all affected secrets** - This is true regardless of where you store them
+2. **Git history is a risk** - But a manageable one with rotation discipline
+3. **KMS can reduce blast radius** - If you add KMS support later, the master key can't leak the same way an age key can
+
+The threat model is "known and accepted" rather than "alarming." sops-nix has thousands of users; if it were catastrophically insecure, we'd know by now.
+
+### What Actually Matters
+
+Focus energy on:
+
+- **Not committing plaintext secrets** (pre-commit hooks, CI checks)
+- **Key hygiene** (don't share private keys over Slack)
+- **Rotation procedures** (documented runbook for when things go wrong)
+- **Least privilege** (the admin/target split handles this well)
+
+The remote storage approach solves a theoretical problem while creating practical ones. Unless you have specific compliance requirements demanding it, keep it simple.
