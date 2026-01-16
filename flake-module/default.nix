@@ -8,92 +8,33 @@ in {
   imports = [packagesModule];
 }
 // (let
-  inherit (lib) mkOption types;
+  inherit (lib) mkOption types mapAttrsToList;
   inherit (flake-parts-lib) mkSubmoduleOptions;
 
   # Age public key regex pattern
   ageKeyPattern = "age1[a-z0-9]{58}";
 
-  keyType = types.submodule {
-    options = {
-      name = mkOption {
-        type = types.str;
-        description = "Identifier for this key";
-      };
-      key = mkOption {
-        type = types.strMatching ageKeyPattern;
-        description = "Age public key (age1...)";
-      };
-    };
-  };
-
-  recipientsType = types.submodule {
-    options = {
-      admins = mkOption {
-        type = types.listOf keyType;
-        default = [];
-        description = "Admin keys - included in all secrets for management";
-      };
-      targets = mkOption {
-        type = types.listOf keyType;
-        default = [];
-        description = "Target keys - referenced per-secret for runtime decryption";
-      };
-    };
-  };
-
-  # Individual secret definition - takes group config for recipient resolution
-  mkSecretType = groupName: groupConfig: let
-    adminNames = map (a: a.name) groupConfig.recipients.admins;
-    targetNames = map (t: t.name) groupConfig.recipients.targets;
-    # Path prefix for this group's secrets
-    pathPrefix =
-      if groupName == "default"
-      then "secrets"
-      else "secrets/${groupName}";
-  in
-    types.submodule ({
-      name,
-      config,
-      ...
-    }: {
+  # Secret type - each secret has its own recipients and path
+  mkSecretType = groupName:
+    types.submodule ({name, config, ...}: let
+      defaultPath =
+        if groupName == "default"
+        then "secrets/${name}.yaml"
+        else "secrets/${groupName}/${name}.yaml";
+    in {
       options = {
-        # User-specified admins (by name) for this secret - defaults to all
-        admins = mkOption {
-          type = types.listOf (types.enum adminNames);
-          default = adminNames;
-          description = "Admin recipient names to include for this secret (defaults to all)";
+        # Recipients as attrset: { alice = "age1..."; server1 = "age1..."; }
+        recipients = mkOption {
+          type = types.attrsOf (types.strMatching ageKeyPattern);
+          default = {};
+          description = "Recipients who can decrypt this secret (name = age public key)";
         };
 
-        # User-specified targets (by name) for this secret
-        # Use ["*"] to include all targets
-        targets = mkOption {
-          type = types.addCheck
-            (types.listOf (types.enum (targetNames ++ ["*"])))
-            (list: !(builtins.elem "*" list) || list == ["*"]);
-          default = [];
-          description = ''
-            Target recipient names to include for this secret.
-            Use ["*"] to include all targets (must be the only element).
-          '';
-        };
-
-        # Computed: all recipients (selected admins + selected targets)
-        _recipients = mkOption {
-          type = types.listOf keyType;
-          internal = true;
-          readOnly = true;
-          default = let
-            allAdmins = groupConfig.recipients.admins;
-            allTargets = groupConfig.recipients.targets;
-            selectedAdmins = builtins.filter (a: builtins.elem a.name config.admins) allAdmins;
-            selectedTargets =
-              if builtins.elem "*" config.targets
-              then allTargets
-              else builtins.filter (t: builtins.elem t.name config.targets) allTargets;
-          in
-            selectedAdmins ++ selectedTargets;
-          description = "Computed list of all recipients (selected admins + selected targets)";
+        # Path to the secret file (relative to flake root)
+        path = mkOption {
+          type = types.str;
+          default = defaultPath;
+          description = "Path to the encrypted secret file (relative to flake root)";
         };
 
         # SOPS creation rule for this secret
@@ -103,71 +44,41 @@ in {
           readOnly = true;
           default = let
             # Escape dots and special chars for regex
-            escapedPath = builtins.replaceStrings ["."] ["\\."] "${pathPrefix}/${name}";
-            allAdmins = groupConfig.recipients.admins;
-            allTargets = groupConfig.recipients.targets;
-            selectedAdmins = builtins.filter (a: builtins.elem a.name config.admins) allAdmins;
-            selectedTargets =
-              if builtins.elem "*" config.targets
-              then allTargets
-              else builtins.filter (t: builtins.elem t.name config.targets) allTargets;
-            adminKeys = map (r: "      - ${r.key}  # ${r.name} (admin)") selectedAdmins;
-            targetKeys = map (r: "      - ${r.key}  # ${r.name} (target)") selectedTargets;
+            escapedPath = builtins.replaceStrings ["." "/"] ["\\." "\\/"] config.path;
+            ageKeys = mapAttrsToList (n: k: "      - ${k}  # ${n}") config.recipients;
           in ''
-            - path_regex: ${escapedPath}\.yaml$
+            - path_regex: ${escapedPath}$
               age:
-            ${builtins.concatStringsSep "\n" (adminKeys ++ targetKeys)}'';
+            ${builtins.concatStringsSep "\n" ageKeys}'';
           description = "SOPS creation rule YAML fragment for this secret";
         };
       };
     });
 
-  # Base secrets configuration (recipients + secret definitions)
-  secretsGroupType = types.submodule ({name, config, ...}: {
-    options = {
-      recipients = mkOption {
-        type = recipientsType;
-        default = {};
-        description = "Age recipient keys for encryption";
-      };
-
-      secret = mkOption {
-        type = types.attrsOf (mkSecretType name config);
-        default = {};
-        description = "Secret definitions for this group";
-      };
-
-      # Bash snippet that sets $workdir to this secrets section directory
-      _workdir = mkOption {
-        type = types.lines;
-        internal = true;
-        readOnly = true;
-        default = flake.lib.buildWorkdirScript (
-          if name == "default"
-          then "secrets"
-          else "secrets/${name}"
-        );
-        description = "Bash snippet that sets $workdir to this secrets section directory";
-      };
-    };
-  });
+  # Group type - an attrset of secrets
+  mkSecretsGroupType = groupName: types.attrsOf (mkSecretType groupName);
 in {
   options.flake = mkSubmoduleOptions {
     secrets = mkOption {
-      type = types.attrsOf secretsGroupType;
+      type = types.lazyAttrsOf (types.submodule ({name, ...}: {
+        freeformType = mkSecretsGroupType name;
+      }));
       default = {};
       description = ''
         Secrets management configuration.
 
-        Each attribute defines a secrets group stored in `secrets/<name>/`.
-        For a single scope, use `default` as the name → `secrets/`.
+        Structure: flake.secrets.<group>.<secret>
+        Group "default" stores secrets at `secrets/<name>.yaml`.
+        Other groups store secrets at `secrets/<group>/<name>.yaml`.
 
         Example:
-          secrets.dev = {
-            recipients.targets = [...];
-            secret.apiKey = {};
-            secret.dbPassword = {};
-          };
+          let
+            admins = { alice = "age1..."; bob = "age1..."; };
+            targets = { server1 = "age1..."; laptop = "age1..."; };
+          in {
+            flake.secrets.default.api-key.recipients = admins // { inherit (targets) server1; };
+            flake.secrets.prod.db-password.recipients = admins // targets;
+          }
       '';
     };
   };

@@ -1,52 +1,52 @@
 # Per-system packages for secrets management
-# Provides: nix run .#secrets.<group>.<cmd>
-# For default group: nix run .#secrets.<cmd> (shorthand)
+# Provides: nix run .#secrets.<group>.<secret>.<cmd>
 {flake}: {
   lib,
   ...
 }: let
   inherit (lib) mapAttrs attrNames concatStringsSep concatMapStringsSep;
 
-  # Available commands for each secrets group
-  commandNames = ["workdir"];
+  # Available commands for each secret
+  commandNames = ["path" "recipients" "rule"];
 
-  mkCommands = secretsConfig: {
-    workdir = ''
-      echo "$workdir"
-    '';
-  };
-
-  # Build command packages for a secrets group
-  mkGroupCommands = groupName: secretsConfig: pkgs:
+  # Build command packages for a secret
+  mkSecretCommands = groupName: secretName: secretConfig: pkgs:
     mapAttrs (cmdName: script:
       pkgs.writeShellApplication {
-        name = "secrets-${groupName}-${cmdName}";
-        text = ''
-          ${secretsConfig._workdir}
-          ${script}
-        '';
+        name = "secrets-${groupName}-${secretName}-${cmdName}";
+        text = script;
       })
-    (mkCommands secretsConfig);
+    {
+      path = ''
+        echo "${secretConfig.path}"
+      '';
+      recipients = ''
+        echo "Recipients for ${groupName}/${secretName}:"
+        ${concatMapStringsSep "\n" (r: ''echo "  ${r}"'') (attrNames secretConfig.recipients)}
+      '';
+      rule = ''
+        cat <<'EOF'
+        ${secretConfig._creationRule}
+        EOF
+      '';
+    };
 
-  # Build a group info package that displays metadata
-  mkGroupPackage = groupName: secretsConfig: pkgs: let
-    adminRecipients = map (k: k.name) secretsConfig.recipients.admins;
-    targetRecipients = map (k: k.name) secretsConfig.recipients.targets;
-    commands = mkGroupCommands groupName secretsConfig pkgs;
+  # Build a secret info package that displays metadata
+  mkSecretPackage = groupName: secretName: secretConfig: pkgs: let
+    recipientNames = attrNames secretConfig.recipients;
+    commands = mkSecretCommands groupName secretName secretConfig pkgs;
 
     base = pkgs.writeShellApplication {
-      name = "secrets-${groupName}";
+      name = "secrets-${groupName}-${secretName}";
       text = ''
-        ${secretsConfig._workdir}
-        echo "Secrets group: ${groupName}"
+        echo "Secret: ${groupName}/${secretName}"
         echo ""
-        echo "Workdir: $workdir"
+        echo "Path: ${secretConfig.path}"
         echo ""
-        echo "Admin recipients: ${if adminRecipients == [] then "(none)" else concatStringsSep ", " adminRecipients}"
-        echo "Target recipients: ${if targetRecipients == [] then "(none)" else concatStringsSep ", " targetRecipients}"
+        echo "Recipients: ${if recipientNames == [] then "(none)" else concatStringsSep ", " recipientNames}"
         echo ""
         echo "Available commands:"
-        ${concatMapStringsSep "\n" (cmd: ''echo "  nix run .#secrets.${groupName}.${cmd}"'') commandNames}
+        ${concatMapStringsSep "\n" (cmd: ''echo "  nix run .#secrets.${groupName}.${secretName}.${cmd}"'') commandNames}
       '';
     };
   in
@@ -54,22 +54,42 @@
       passthru = (old.passthru or {}) // commands;
     });
 
-  # Build the secrets package with nested passthru
-  mkSecretsPackage = secretsConfigs: pkgs: let
-    groupNames = attrNames secretsConfigs;
+  # Build a group package with secrets as passthru
+  mkGroupPackage = groupName: groupSecrets: pkgs: let
+    secretNames = attrNames groupSecrets;
 
-    # Build group packages (each with their own commands as passthru)
-    groups = mapAttrs (groupName: secretsConfig:
-      mkGroupPackage groupName secretsConfig pkgs)
-    secretsConfigs;
+    secrets = mapAttrs (secretName: secretConfig:
+      mkSecretPackage groupName secretName secretConfig pkgs)
+    groupSecrets;
 
-    # Default group shortcuts (if exists)
-    defaultCommands =
-      if secretsConfigs ? default
-      then mkGroupCommands "default" secretsConfigs.default pkgs
-      else {};
+    base = pkgs.writeShellApplication {
+      name = "secrets-${groupName}";
+      text = ''
+        echo "Secrets group: ${groupName}"
+        echo ""
+        echo "Secrets:"
+        ${concatMapStringsSep "\n" (s: ''echo "  - ${s}"'') secretNames}
+        echo ""
+        echo "Usage:"
+        echo "  nix run .#secrets.${groupName}.<secret>        Show secret info"
+        echo "  nix run .#secrets.${groupName}.<secret>.<cmd>  Run command"
+        echo ""
+        echo "Commands: ${concatStringsSep ", " commandNames}"
+      '';
+    };
+  in
+    base.overrideAttrs (old: {
+      passthru = (old.passthru or {}) // secrets;
+    });
 
-    # Top-level package showing all groups
+  # Build the top-level secrets package
+  mkSecretsPackage = secretsGroups: pkgs: let
+    groupNames = attrNames secretsGroups;
+
+    groups = mapAttrs (groupName: groupSecrets:
+      mkGroupPackage groupName groupSecrets pkgs)
+    secretsGroups;
+
     base = pkgs.writeShellApplication {
       name = "secrets";
       text = ''
@@ -79,18 +99,16 @@
         ${concatMapStringsSep "\n" (g: ''echo "  - ${g}"'') groupNames}
         echo ""
         echo "Usage:"
-        echo "  nix run .#secrets.<group>        Show group info"
-        echo "  nix run .#secrets.<group>.<cmd>  Run command"
-        ${lib.optionalString (secretsConfigs ? default) ''
-          echo ""
-          echo "Default group shortcuts:"
-          ${concatMapStringsSep "\n" (cmd: ''echo "  nix run .#secrets.${cmd}"'') commandNames}
-        ''}
+        echo "  nix run .#secrets.<group>                  Show group info"
+        echo "  nix run .#secrets.<group>.<secret>         Show secret info"
+        echo "  nix run .#secrets.<group>.<secret>.<cmd>   Run command"
+        echo ""
+        echo "Commands: ${concatStringsSep ", " commandNames}"
       '';
     };
   in
     base.overrideAttrs (old: {
-      passthru = (old.passthru or {}) // groups // defaultCommands;
+      passthru = (old.passthru or {}) // groups;
     });
 in {
   perSystem = {pkgs, ...}: {
