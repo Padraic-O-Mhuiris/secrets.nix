@@ -1,6 +1,7 @@
 {flake}: {
   lib,
   flake-parts-lib,
+  self,
   ...
 }: let
   packagesModule = import ./packages.nix {inherit flake;};
@@ -61,13 +62,22 @@ in {
           description = "File location and format settings";
         };
 
-        # Computed full path to the secret file
-        _path = mkOption {
+        # Computed relative path to the secret file
+        _relPath = mkOption {
           type = types.str;
           internal = true;
           readOnly = true;
           default = "${config.file.dir}/${name}.${config.file.type}";
-          description = "Full path to the encrypted secret file";
+          description = "Relative path to the encrypted secret file";
+        };
+
+        # Nix store path to the secret file
+        _storePath = mkOption {
+          type = types.path;
+          internal = true;
+          readOnly = true;
+          default = self + "/${config._relPath}";
+          description = "Nix store path to the encrypted secret file";
         };
 
         # SOPS creation rule for this secret
@@ -77,7 +87,7 @@ in {
           readOnly = true;
           default = let
             # Escape dots and special chars for regex
-            escapedPath = builtins.replaceStrings ["." "/"] ["\\." "\\/"] config._path;
+            escapedPath = builtins.replaceStrings ["." "/"] ["\\." "\\/"] config._relPath;
             ageKeys = mapAttrsToList (n: k: "      - ${k}  # ${n}") config.recipients;
           in ''
             - path_regex: ${escapedPath}$
