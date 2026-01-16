@@ -18,7 +18,7 @@
       })
     {
       path = ''
-        echo "${secretConfig.path}"
+        echo "${secretConfig._path}"
       '';
       recipients = ''
         echo "Recipients for ${groupName}/${secretName}:"
@@ -41,7 +41,7 @@
       text = ''
         echo "Secret: ${groupName}/${secretName}"
         echo ""
-        echo "Path: ${secretConfig.path}"
+        echo "Path: ${secretConfig._path}"
         echo ""
         echo "Recipients: ${if recipientNames == [] then "(none)" else concatStringsSep ", " recipientNames}"
         echo ""
