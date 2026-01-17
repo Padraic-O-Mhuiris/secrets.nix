@@ -6,7 +6,8 @@
   uncapitalizeFirst = str: let
     first = lib.substring 0 1 str;
     rest = lib.substring 1 (-1) str;
-  in (lib.toLower first) + rest;
+  in
+    (lib.toLower first) + rest;
 
   # Get operation names for display
   operationNames = secret:
@@ -14,34 +15,51 @@
 
   # Build operation packages from __operations for a single secret
   mkOperationPackages = secret:
-    mapAttrs' (builderName: builderFn:
-      nameValuePair
+    mapAttrs' (
+      builderName: builderFn:
+        nameValuePair
         (uncapitalizeFirst (lib.removePrefix "mk" builderName))
         (builderFn pkgs)
-    ) secret.__operations;
+    )
+    secret.__operations;
 
   # Create a secret package with passthru to its operations
   mkSecretPackage = secretName: secret: let
     operations = mkOperationPackages secret;
     opNames = operationNames secret;
 
+    # Wrapper package for ops namespace
+    opsPackage = pkgs.writeShellApplication {
+      name = "secret-${secretName}-ops";
+      text = ''
+        echo "Operations for secret: ${secretName}"
+        echo ""
+        echo "Available:"
+        ${concatStringsSep "\n" (map (cmd: ''echo "  - ${cmd}"'') opNames)}
+      '';
+    };
+
+    ops = opsPackage.overrideAttrs (old: {
+      passthru = (old.passthru or {}) // operations;
+    });
+
     base = pkgs.writeShellApplication {
       name = "secret-${secretName}";
       text = ''
         echo "Secret: ${secretName}"
         echo ""
-        echo "Path: ${secret._fileRelativePath}"
-        echo "Exists in store: ${if secret._fileExistsInStore then "yes" else "no"}"
+        # shellcheck disable=SC2016
+        echo 'Path: ${secret._runtimePath}'
         echo ""
         echo "Recipients: ${concatStringsSep ", " (attrNames secret.recipients)}"
         echo ""
-        echo "Available commands:"
-        ${concatStringsSep "\n" (map (cmd: ''echo "  nix run .#secrets.${secretName}.${cmd}"'') opNames)}
+        echo "Operations: .ops.<cmd>"
+        ${concatStringsSep "\n" (map (cmd: ''echo "  - ${cmd}"'') opNames)}
       '';
     };
   in
     base.overrideAttrs (old: {
-      passthru = (old.passthru or {}) // operations;
+      passthru = (old.passthru or {}) // { inherit ops; };
     });
 
   # All secret packages

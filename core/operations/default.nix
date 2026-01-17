@@ -2,15 +2,20 @@
   lib,
   name,
   config,
+  settings,
 }: let
   inherit (lib) mkOption types;
 
-  mkExamplePkg = pkgs:
+  mkExamplePkg = pkgs: let
+    rootPkg = settings.root.mkPackage pkgs;
+  in
     pkgs.writeShellApplication {
       name = "example-${name}";
       text = ''
-        echo "Example operation for secret: ${name}"
-        echo "Relative path: ${config._fileRelativePath}"
+        export ${settings.root.envVarName}="$(${rootPkg}/bin/secret-root)"
+
+        echo "Secret: ${name}"
+        echo "Runtime path: ${config._runtimePath}"
       '';
     };
 in {
