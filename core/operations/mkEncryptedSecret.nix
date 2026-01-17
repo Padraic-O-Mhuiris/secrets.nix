@@ -3,15 +3,24 @@
   jq,
   sops,
   name,
-  findEncryptedSecretBin,
+  encryptedSecretPathBin,
+  local ? false,
 }:
 writeShellApplication {
-  name = "print-encrypted-secret-${name}";
+  name =
+    if local
+    then "local-encrypted-secret-${name}"
+    else "encrypted-secret-${name}";
   runtimeInputs = [jq sops];
-  text =
+  text = let
+    binName =
+      if local
+      then "local-encrypted-secret-path-${name}"
+      else "encrypted-secret-path-${name}";
+  in
     # bash
     ''
-      secret_path="$(${findEncryptedSecretBin}/bin/find-encrypted-secret-${name})"
+      secret_path="$(${encryptedSecretPathBin}/bin/${binName})"
 
       # Validate it's a valid sops-encrypted file
       if ! status=$(sops filestatus "$secret_path" 2>/dev/null); then

@@ -3,18 +3,16 @@
   name,
   relPath,
   storePath,
-  existsInStore,
+  local ? false,
 }:
 writeShellApplication {
-  name = "find-encrypted-secret-${name}";
+  name =
+    if local
+    then "local-encrypted-secret-path-${name}"
+    else "encrypted-secret-path-${name}";
   text =
-    if existsInStore
+    if local
     then
-      # bash
-      ''
-        echo "${storePath}"
-      ''
-    else
       # bash
       ''
         find_flake_root() {
@@ -42,5 +40,10 @@ writeShellApplication {
           echo "Error: Secret not found at $secret_path" >&2
           exit 1
         fi
+      ''
+    else
+      # bash
+      ''
+        echo "${storePath}"
       '';
 }
