@@ -16,6 +16,21 @@
       perSystem = {pkgs, ...}: {
         devShells.default = pkgs.mkShell {
           packages = [pkgs.alejandra pkgs.sops pkgs.age];
+          shellHook = ''
+            find_flake_root() {
+              local dir="$PWD"
+              while [[ "$dir" != / ]]; do
+                if [[ -f "$dir/flake.nix" ]]; then
+                  echo "$dir"
+                  return 0
+                fi
+                dir="$(dirname "$dir")"
+              done
+              echo "ERROR: Unable to locate flake.nix" >&2
+              return 1
+            }
+            export FLAKE_ROOT="$(find_flake_root)"
+          '';
         };
       };
 
