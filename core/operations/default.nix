@@ -59,5 +59,31 @@ in {
         };
       description = "Operation: validates and prints the encrypted secret contents from local path";
     };
+
+    mkEditEncryptedSecret = mkOption {
+      type = types.functionTo types.package;
+      readOnly = true;
+      default = pkgs:
+        pkgs.callPackage ./mkEditEncryptedSecret.nix {
+          inherit name;
+          relPath = config._fileRelativePath;
+          encryptedSecretPathBin = mkEncryptedSecretPathPkg pkgs;
+          local = false;
+        };
+      description = "Operation: edit encrypted secret from nix store, writing to provided path (default: relative path)";
+    };
+
+    mkLocalEditEncryptedSecret = mkOption {
+      type = types.functionTo types.package;
+      readOnly = true;
+      default = pkgs:
+        pkgs.callPackage ./mkEditEncryptedSecret.nix {
+          inherit name;
+          relPath = config._fileRelativePath;
+          encryptedSecretPathBin = mkLocalEncryptedSecretPathPkg pkgs;
+          local = true;
+        };
+      description = "Operation: edit encrypted secret from local path in place (or to provided path)";
+    };
   };
 }
