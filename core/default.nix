@@ -1,5 +1,4 @@
 # secrets.nix - minimal secrets management module
-# TODO: settings = {...}; for global configuration (future work)
 {lib}: let
   inherit (lib) mkOption types;
 
@@ -23,8 +22,49 @@
     };
   };
 
+  # Root settings submodule
+  rootModule = {
+    options = {
+      envVarName = mkOption {
+        type = types.str;
+        default = "SECRET_ROOT_DIR";
+        description = "Environment variable name for the secrets root directory";
+      };
+
+      mkPackage = mkOption {
+        type = types.functionTo types.package;
+        description = "Builder function that produces a derivation to find the project root at runtime";
+        default = pkgs:
+          pkgs.writeShellApplication {
+            name = "secret-root";
+            runtimeInputs = [pkgs.git];
+            text = ''
+              git rev-parse --show-toplevel
+            '';
+          };
+      };
+    };
+  };
+
+  # Settings submodule
+  settingsModule = {
+    options = {
+      root = mkOption {
+        type = types.submodule rootModule;
+        default = {};
+        description = "Root directory settings";
+      };
+
+      dir = mkOption {
+        type = types.str;
+        default = "secrets";
+        description = "Default directory for secret files (relative to project root)";
+      };
+    };
+  };
+
   # Secret submodule
-  secretModule = {
+  secretModule = settings: {
     name,
     config,
     self,
@@ -39,7 +79,7 @@
 
       dir = mkOption {
         type = types.str;
-        default = "secrets";
+        default = settings.dir;
         description = "Directory for secret file (relative to project root)";
       };
 
@@ -57,49 +97,55 @@
         description = "Secret filename (<secret>.<format>)";
       };
 
-      _fileRelativePath = mkOption {
+      _runtimePath = mkOption {
         type = types.str;
         internal = true;
         readOnly = true;
-        default = "${config.dir}/${config._fileName}";
-        description = "Relative path from project root to secret file";
+        default = "\$${settings.root.envVarName}/${config.dir}/${config._fileName}";
+        description = "Runtime path using environment variable";
       };
 
-      _fileStorePath = mkOption {
+      _storePath = mkOption {
         type = types.path;
         internal = true;
         readOnly = true;
-        default = self + "/${config._fileRelativePath}";
+        default = self + "/${config.dir}/${config._fileName}";
         description = "Nix store path to the secret file";
       };
 
-      _fileExistsInStore = mkOption {
+      _existsInStore = mkOption {
         type = types.bool;
         internal = true;
         readOnly = true;
-        default = builtins.pathExists config._fileStorePath;
+        default = builtins.pathExists config._storePath;
         description = "Whether the secret file exists in the store";
       };
 
       # Package operations submodule
       __operations = mkOption {
-        type = types.submodule (import ./operations {inherit lib name config;});
+        type = types.submodule (import ./operations {inherit lib name config settings;});
         internal = true;
         readOnly = true;
         default = {};
         description = "Package operation functions";
       };
-
     };
   };
 in {
   # Evaluate a secrets configuration
   mkSecrets = {
     self, # flake self reference for store paths
-  }: secrets:
+    settings ? {},
+  }: secrets: let
+    evaluatedSettings =
+      (lib.evalModules {
+        modules = [settingsModule {config = settings;}];
+      })
+      .config;
+  in
     lib.mapAttrs (name: secretDef:
       (lib.evalModules {
-        modules = [secretModule {config = secretDef;}];
+        modules = [(secretModule evaluatedSettings) {config = secretDef;}];
         specialArgs = {inherit self name;};
       })
       .config)
