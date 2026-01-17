@@ -4,7 +4,7 @@
   self,
   ...
 }: let
-  packagesModule = import ./packages.nix {inherit flake;};
+  packagesModule = import ./packages {inherit flake;};
 in {
   imports = [packagesModule];
 }
@@ -14,6 +14,47 @@ in {
 
   # Age public key regex pattern
   ageKeyPattern = "age1[a-z0-9]{58}";
+
+  # Recipient type - age key + decryption configuration
+  recipientType = types.submodule ({name, config, ...}: {
+    options = {
+      key = mkOption {
+        type = types.strMatching ageKeyPattern;
+        description = "Age public key for this recipient";
+      };
+
+      decryption = {
+        command = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = ''
+            Command to retrieve the private key. If null, the
+            <RECIPIENT_NAME>__DECRYPT_CMD environment variable can be used
+            at runtime. The command must print the private key to stdout.
+          '';
+        };
+
+        withPackages = mkOption {
+          type = types.functionTo (types.listOf types.package);
+          default = pkgs: [];
+          description = ''
+            Function that takes pkgs and returns a list of packages
+            to include in PATH when running the decrypt command.
+            Example: pkgs: [ pkgs.pass pkgs.gnupg ]
+          '';
+        };
+      };
+
+      # Computed: environment variable name for this recipient
+      _envVar = mkOption {
+        type = types.str;
+        internal = true;
+        readOnly = true;
+        default = "${lib.toUpper (builtins.replaceStrings ["-"] ["_"] name)}__DECRYPT_CMD";
+        description = "Environment variable name for decrypt command override";
+      };
+    };
+  });
 
   # Directory path type - must not end with file extension
   dirType = types.addCheck types.str (s:
@@ -45,11 +86,11 @@ in {
         else "secrets/${groupName}";
     in {
       options = {
-        # Recipients as attrset: { alice = "age1..."; server1 = "age1..."; }
+        # Recipients as attrset with decryption configuration
         recipients = mkOption {
-          type = types.attrsOf (types.strMatching ageKeyPattern);
+          type = types.attrsOf recipientType;
           default = {};
-          description = "Recipients who can decrypt this secret (name = age public key)";
+          description = "Recipients who can decrypt this secret";
         };
 
         # File location settings
@@ -97,7 +138,7 @@ in {
           default = let
             # Escape dots and special chars for regex
             escapedPath = builtins.replaceStrings ["." "/"] ["\\." "\\/"] config._relPath;
-            ageKeys = mapAttrsToList (n: k: "      - ${k}  # ${n}") config.recipients;
+            ageKeys = mapAttrsToList (n: r: "      - ${r.key}  # ${n}") config.recipients;
           in ''
             - path_regex: ${escapedPath}$
               age:
@@ -125,11 +166,20 @@ in {
 
         Example:
           let
-            admins = { alice = "age1..."; bob = "age1..."; };
-            targets = { server1 = "age1..."; laptop = "age1..."; };
+            alice = {
+              key = "age1...";
+              # No command - uses ALICE__DECRYPT_CMD env var at runtime
+            };
+            server1 = {
+              key = "age1...";
+              decryption = {
+                command = "ssh-to-age -private-key -i /etc/ssh/ssh_host_ed25519_key";
+                withPackages = pkgs: [ pkgs.ssh-to-age ];
+              };
+            };
           in {
-            flake.secrets.default.api-key.recipients = admins // { inherit (targets) server1; };
-            flake.secrets.prod.db-password.recipients = admins // targets;
+            flake.secrets.default.api-key.recipients = { inherit alice server1; };
+            flake.secrets.prod.db-password.recipients = { inherit server1; };
           }
       '';
     };
