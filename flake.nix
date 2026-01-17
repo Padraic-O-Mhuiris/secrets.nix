@@ -10,53 +10,47 @@
     flake-parts,
     self,
     ...
-  }:
+  }: let
+    inherit (inputs.nixpkgs) lib;
+    inherit (import ./core {inherit lib;}) mkSecrets mkSecretsPackages;
+
+    admins = {
+      alice = "age1v9z267t653yn0pklhy9v23hy3y430snqpeatzp48958utqnhedzq6uvtkd";
+      bob = "age19t7cnvcpqxv5walahqwz7udv3rrelqm7enztwgk5pg3famr3sq7shzx0ry";
+    };
+
+    targets = {
+      server1 = "age1dpnznv446qgzah35vndw5ys763frgz8h6exfmecn8cvnu394ty5q0cts7s";
+    };
+
+    mkRecipients = keys:
+      builtins.mapAttrs (_: key: {inherit key;}) keys;
+
+    example = mkSecrets {inherit self;} {
+      api-key.recipients = mkRecipients admins;
+      db-password = {
+        recipients = mkRecipients (admins // targets);
+        dir = "secrets/prod";
+      };
+      service-account = {
+        recipients = mkRecipients admins;
+        format = "json";
+      };
+    };
+  in
     flake-parts.lib.mkFlake {inherit inputs;} {
       systems = inputs.nixpkgs.lib.systems.flakeExposed;
+
       perSystem = {pkgs, ...}: {
         devShells.default = pkgs.mkShell {
           packages = [pkgs.alejandra pkgs.sops pkgs.age];
         };
+
+        packages.secrets = mkSecretsPackages example pkgs;
       };
 
-      flake = let
-        inherit (import ./core {inherit (inputs.nixpkgs) lib;}) mkSecrets;
-      in {
-        inherit mkSecrets;
-
-        example = let
-          admins = {
-            # AGE-SECRET-KEY-1X6NC9SE3V4Z55LQDZCYASDMD0DCQFU9K3EDA5QKC3F5CTNLSZHJSC0JHWK
-            alice = "age1v9z267t653yn0pklhy9v23hy3y430snqpeatzp48958utqnhedzq6uvtkd";
-            # AGE-SECRET-KEY-1Z5E3JCXWWFMPQS9DFH6U2TFA7KZ4Z8DPSZ3Y7SVQSYFXAZQDXXVSR2298J
-            bob = "age19t7cnvcpqxv5walahqwz7udv3rrelqm7enztwgk5pg3famr3sq7shzx0ry";
-          };
-
-          targets = {
-            # AGE-SECRET-KEY-1WW7NT3FU3RMC5TJMD45TA4TWTPT4NXN9ZJR8UHU337W5ZEMWTFFQMW3L5V
-            server1 = "age1dpnznv446qgzah35vndw5ys763frgz8h6exfmecn8cvnu394ty5q0cts7s";
-          };
-
-          # Helper to convert key strings to recipient attrsets
-          mkRecipients = keys:
-            builtins.mapAttrs (name: key: {inherit key;}) keys;
-        in
-          mkSecrets {inherit self;} {
-            # Minimal: just recipients
-            api-key.recipients = mkRecipients admins;
-
-            # With custom dir
-            db-password = {
-              recipients = mkRecipients (admins // targets);
-              dir = "secrets/prod";
-            };
-
-            # JSON format
-            service-account = {
-              recipients = mkRecipients admins;
-              format = "json";
-            };
-          };
+      flake = {
+        inherit mkSecrets mkSecretsPackages example;
       };
     };
 }

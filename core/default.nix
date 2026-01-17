@@ -81,14 +81,15 @@
         description = "Whether the secret file exists in the store";
       };
 
-      # Package builders submodule
-      __builders = mkOption {
+      # Package operations submodule
+      __operations = mkOption {
         type = types.submodule (import ./builders {inherit lib name config;});
         internal = true;
         readOnly = true;
         default = {};
-        description = "Package builder functions";
+        description = "Package operation functions";
       };
+
     };
   };
 in {
@@ -103,4 +104,7 @@ in {
       })
       .config)
     secrets;
+
+  # Create a "secrets" package with nested passthru
+  mkSecretsPackages = import ./packages.nix {inherit lib;};
 }
