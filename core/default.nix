@@ -83,7 +83,7 @@
 
       # Package operations submodule
       __operations = mkOption {
-        type = types.submodule (import ./builders {inherit lib name config;});
+        type = types.submodule (import ./operations {inherit lib name config;});
         internal = true;
         readOnly = true;
         default = {};
