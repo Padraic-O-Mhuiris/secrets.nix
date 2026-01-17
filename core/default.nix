@@ -1,8 +1,6 @@
 # secrets.nix - minimal secrets management module
 # TODO: settings = {...}; for global configuration (future work)
-{
-  lib,
-}: let
+{lib}: let
   inherit (lib) mkOption types;
 
   # Age public key regex pattern
@@ -85,26 +83,16 @@
     };
   };
 
-  # Root module
-  rootModule = {
-    options = {
-      secrets = mkOption {
-        type = types.attrsOf (types.submodule secretModule);
-        default = {};
-        description = "Secret definitions";
-      };
-    };
-  };
 in {
   # Evaluate a secrets configuration
   mkSecrets = {
     self, # flake self reference for store paths
-    modules ? [],
-  }: let
-    evaluated = lib.evalModules {
-      modules = [rootModule] ++ modules;
-      specialArgs = {inherit self;};
-    };
-  in
-    evaluated.config;
+  }: secrets:
+    lib.mapAttrs (name: secretDef:
+      (lib.evalModules {
+        modules = [secretModule {config = secretDef;}];
+        specialArgs = {inherit self name;};
+      })
+      .config)
+    secrets;
 }
