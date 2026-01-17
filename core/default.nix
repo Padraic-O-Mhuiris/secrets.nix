@@ -73,16 +73,23 @@
         description = "Nix store path to the secret file";
       };
 
-      _fileExists = mkOption {
+      _fileExistsInStore = mkOption {
         type = types.bool;
         internal = true;
         readOnly = true;
         default = builtins.pathExists config._fileStorePath;
         description = "Whether the secret file exists in the store";
       };
+
+      _fileExistsInRelPath = mkOption {
+        type = types.bool;
+        internal = true;
+        readOnly = true;
+        default = builtins.pathExists ((builtins.getEnv "FLAKE_ROOT") + "/${config._fileRelativePath}");
+        description = "Whether the secret file exists at the relative path (requires --impure and FLAKE_ROOT)";
+      };
     };
   };
-
 in {
   # Evaluate a secrets configuration
   mkSecrets = {
