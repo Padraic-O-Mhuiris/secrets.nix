@@ -6,30 +6,51 @@
 }: let
   inherit (lib) mapAttrs attrNames concatStringsSep concatMapStringsSep;
 
+  # Import access module
+  mkAccessPackage = import ./access.nix {inherit lib;};
+
   # Available commands for each secret
-  commandNames = ["path" "recipients" "rule"];
+  commandNames = ["path" "recipients" "rule" "edit" "decrypt"];
 
   # Build command packages for a secret
-  mkSecretCommands = groupName: secretName: secretConfig: pkgs:
-    mapAttrs (cmdName: script:
-      pkgs.writeShellApplication {
-        name = "secrets-${groupName}-${secretName}-${cmdName}";
-        text = script;
-      })
-    {
-      path = ''
-        echo "${secretConfig._path}"
+  mkSecretCommands = groupName: secretName: secretConfig: pkgs: {
+    path = pkgs.writeShellApplication {
+      name = "secrets-${groupName}-${secretName}-path";
+      text = ''
+        echo "${secretConfig._relPath}"
       '';
-      recipients = ''
+    };
+    recipients = pkgs.writeShellApplication {
+      name = "secrets-${groupName}-${secretName}-recipients";
+      text = ''
         echo "Recipients for ${groupName}/${secretName}:"
-        ${concatMapStringsSep "\n" (r: ''echo "  ${r}"'') (attrNames secretConfig.recipients)}
+        ${concatMapStringsSep "\n" (name: let r = secretConfig.recipients.${name}; in ''
+          echo "  ${name}: ${r.key}"
+          echo "    env var: ${r._envVar}"
+          echo "    command: ${if r.decryption.command == null then "(none - env var only)" else r.decryption.command}"
+        '') (attrNames secretConfig.recipients)}
       '';
-      rule = ''
+    };
+    rule = pkgs.writeShellApplication {
+      name = "secrets-${groupName}-${secretName}-rule";
+      text = ''
         cat <<'EOF'
         ${secretConfig._creationRule}
         EOF
       '';
     };
+    edit = pkgs.writeShellApplication {
+      name = "secrets-${groupName}-${secretName}-edit";
+      runtimeInputs = [ pkgs.sops ];
+      text = ''
+        mkdir -p "${secretConfig.file.dir}"
+        sops "${secretConfig._relPath}"
+      '';
+    };
+    decrypt = mkAccessPackage {
+      inherit pkgs groupName secretName secretConfig;
+    };
+  };
 
   # Build a secret info package that displays metadata
   mkSecretPackage = groupName: secretName: secretConfig: pkgs: let
@@ -41,7 +62,8 @@
       text = ''
         echo "Secret: ${groupName}/${secretName}"
         echo ""
-        echo "Path: ${secretConfig._path}"
+        echo "Path: ${secretConfig._relPath}"
+        echo "Exists: ${if secretConfig._exists then "yes" else "no"}"
         echo ""
         echo "Recipients: ${if recipientNames == [] then "(none)" else concatStringsSep ", " recipientNames}"
         echo ""
