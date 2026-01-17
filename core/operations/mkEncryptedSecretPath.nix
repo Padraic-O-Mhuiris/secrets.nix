@@ -33,13 +33,7 @@ writeShellApplication {
         }
 
         secret_path="$flake_root/${relPath}"
-        if [[ -f "$secret_path" ]]; then
-          echo "$secret_path"
-          exit 0
-        else
-          echo "Error: Secret not found at $secret_path" >&2
-          exit 1
-        fi
+        echo "$secret_path"
       ''
     else
       # bash
