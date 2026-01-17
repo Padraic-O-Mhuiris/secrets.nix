@@ -15,12 +15,22 @@
     inherit (import ./core {inherit lib;}) mkSecrets mkSecretsPackages;
 
     admins = {
-      alice = "age1v9z267t653yn0pklhy9v23hy3y430snqpeatzp48958utqnhedzq6uvtkd";
-      bob = "age19t7cnvcpqxv5walahqwz7udv3rrelqm7enztwgk5pg3famr3sq7shzx0ry";
+      # created: 2026-01-17T18:17:06Z
+      # public key: age1yct6cdz4f2hguaamc0jqxjx0m00v2puqacx0339mutagv8xmpffqcxql4v
+      # AGE-SECRET-KEY-1EKATW8QJD4NF4XCX7XME5VDJ8MVER7LM4FHCWF6UFXSRJTLTKGCSYEZW68
+      alice = "age1yct6cdz4f2hguaamc0jqxjx0m00v2puqacx0339mutagv8xmpffqcxql4v";
+
+      # created: 2026-01-17T18:17:25Z
+      # public key: age1wdw6tuppmmcufrh6wzgy93jah9wzppaqn69wt5un8qzz8lk5ep5ss6ed3f
+      # AGE-SECRET-KEY-1YM4U0AQYVSRRLCU70DQD5T09SS6CQ9S4ZLCCJ8KW9N7C53NJ7ADSLREPRZ
+      bob = "age1wdw6tuppmmcufrh6wzgy93jah9wzppaqn69wt5un8qzz8lk5ep5ss6ed3f";
     };
 
     targets = {
-      server1 = "age1dpnznv446qgzah35vndw5ys763frgz8h6exfmecn8cvnu394ty5q0cts7s";
+      # created: 2026-01-17T18:17:38Z
+      # public key: age13kzxh2jpksuad8yaegf4wg8zzl93mgns0fj32a23ldl8nwjweprq6efm0t
+      # AGE-SECRET-KEY-15S77DSN4T7ZQLUXGU2XPZMRP5J5WMSL5YZSMV3Q5WFZQUR4EZKMS9VN3PD
+      server1 = "age13kzxh2jpksuad8yaegf4wg8zzl93mgns0fj32a23ldl8nwjweprq6efm0t";
     };
 
     mkRecipients = keys:
