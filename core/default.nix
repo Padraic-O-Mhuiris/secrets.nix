@@ -81,12 +81,13 @@
         description = "Whether the secret file exists in the store";
       };
 
-      _fileExistsInRelPath = mkOption {
-        type = types.bool;
+      # Package builders submodule
+      __builders = mkOption {
+        type = types.submodule (import ./builders {inherit lib name config;});
         internal = true;
         readOnly = true;
-        default = builtins.pathExists ((builtins.getEnv "FLAKE_ROOT") + "/${config._fileRelativePath}");
-        description = "Whether the secret file exists at the relative path (requires --impure and FLAKE_ROOT)";
+        default = {};
+        description = "Package builder functions";
       };
     };
   };
