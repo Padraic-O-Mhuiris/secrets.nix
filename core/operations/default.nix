@@ -85,5 +85,18 @@ in {
         };
       description = "Operation: edit encrypted secret from local path in place (or to provided path)";
     };
+
+    mkCreateEncryptedSecret = mkOption {
+      type = types.functionTo types.package;
+      readOnly = true;
+      default = pkgs:
+        pkgs.callPackage ./mkCreateEncryptedSecret.nix {
+          inherit name;
+          relPath = config._fileRelativePath;
+          format = config.format;
+          recipients = config.recipients;
+        };
+      description = "Operation: create a new encrypted secret interactively (local only)";
+    };
   };
 }
