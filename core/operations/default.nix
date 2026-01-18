@@ -40,6 +40,16 @@
     fi
   '';
 
+  # Code block that layers on secretPathContext and validates file does NOT exist
+  secretNotExistsContext = pkgs: ''
+    ${secretPathContext pkgs}
+
+    if [[ -f "$SECRET_PATH" ]]; then
+      echo "Error: Secret file already exists: $SECRET_PATH" >&2
+      exit 1
+    fi
+  '';
+
   existsPkg = pkgs:
     pkgs.writeShellApplication {
       name = "secret-exists-${name}";
@@ -70,6 +80,54 @@
         fi
       '';
     };
+
+  # Generate .sops.yaml content for this secret
+  sopsConfig = let
+    ageKeys = map (r: r.key) (builtins.attrValues config.recipients);
+    ageKeysList = builtins.concatStringsSep "\n          - " ageKeys;
+  in ''
+    creation_rules:
+      - path_regex: .*
+        key_groups:
+          - age:
+              - ${ageKeysList}
+  '';
+
+  initPkg = pkgs:
+    pkgs.writeShellApplication {
+      name = "secret-init-${name}";
+      runtimeInputs = [pkgs.sops];
+      text = ''
+        ${secretNotExistsContext pkgs}
+
+        # Ensure directory exists
+        mkdir -p "$(dirname "$SECRET_PATH")"
+
+        SOPS_CONFIG=$(cat <<'SOPS_CONFIG'
+        ${sopsConfig}SOPS_CONFIG
+        )
+
+        if [[ -n "''${1:-}" ]]; then
+          # Content provided as argument - encrypt directly
+          if echo -n "$1" | sops --config <(echo "$SOPS_CONFIG") -e --input-type binary --output-type binary /dev/stdin > "$SECRET_PATH"; then
+            echo "Secret created at $SECRET_PATH"
+          else
+            [[ -f "$SECRET_PATH" ]] && rm -f "$SECRET_PATH"
+            echo "Error: Failed to create secret" >&2
+            exit 1
+          fi
+        else
+          # No argument - open editor
+          if sops --config <(echo "$SOPS_CONFIG") "$SECRET_PATH"; then
+            echo "Secret created at $SECRET_PATH"
+          else
+            [[ -f "$SECRET_PATH" ]] && rm -f "$SECRET_PATH"
+            echo "Error: Failed to create secret" >&2
+            exit 1
+          fi
+        fi
+      '';
+    };
 in {
   options = {
     resolve = mkOption {
@@ -91,6 +149,13 @@ in {
       readOnly = true;
       default = statusPkg;
       description = "Operation: checks if the secret file is properly encrypted";
+    };
+
+    init = mkOption {
+      type = types.functionTo types.package;
+      readOnly = true;
+      default = initPkg;
+      description = "Operation: creates a new encrypted secret (fails if file already exists)";
     };
   };
 }
