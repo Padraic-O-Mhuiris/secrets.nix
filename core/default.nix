@@ -83,18 +83,12 @@
         description = "Directory for secret file (relative to project root)";
       };
 
-      format = mkOption {
-        type = types.enum ["json" "yaml" "env" "ini"];
-        default = "yaml";
-        description = "File format for the secret";
-      };
-
       _fileName = mkOption {
         type = types.str;
         internal = true;
         readOnly = true;
-        default = "${name}.${config.format}";
-        description = "Secret filename (<secret>.<format>)";
+        default = "${name}";
+        description = "Secret filename";
       };
 
       _runtimePath = mkOption {
