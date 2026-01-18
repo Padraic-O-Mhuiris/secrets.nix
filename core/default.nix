@@ -93,8 +93,15 @@
         type = types.str;
         internal = true;
         readOnly = true;
-        default = "${name}";
-        description = "Secret filename";
+        default = let
+          ext = {
+            bin = "";
+            json = ".json";
+            yaml = ".yaml";
+            env = ".env";
+          }.${config.format};
+        in "${name}${ext}";
+        description = "Secret filename with format extension";
       };
 
       _runtimePath = mkOption {
