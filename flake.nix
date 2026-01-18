@@ -36,16 +36,17 @@
     mkRecipients = keys:
       builtins.mapAttrs (_: key: {inherit key;}) keys;
 
-    example = mkSecrets {inherit self;} {
+    example = mkSecrets {
       api-key = {
+        dir = ./secrets;
         recipients = mkRecipients admins;
-        format = "env";
       };
       db-password = {
+        dir = ./secrets;
         recipients = mkRecipients (admins // targets);
-        dir = "secrets/prod";
       };
       service-account = {
+        dir = ./secrets;
         recipients = mkRecipients admins;
         format = "json";
       };

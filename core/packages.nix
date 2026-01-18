@@ -23,6 +23,7 @@
   mkSecretPackage = secretName: secret: let
     operations = buildOperationPackages secret;
     opNames = operationNames secret;
+    existsStatus = if secret._exists then "exists" else "not created";
 
     base = pkgs.writeShellApplication {
       name = "secret-${secretName}";
@@ -30,12 +31,14 @@
         echo "Secret: ${secretName}"
         echo ""
         echo "Format: ${secret.format}"
-        echo "Dir: ${secret.dir}"
         echo "File: ${secret._fileName}"
+        echo "Dir: ${toString secret.dir}"
+        echo "Path: ${toString secret._path}"
+        echo "Status: ${existsStatus}"
         echo ""
         echo "Recipients: ${concatStringsSep ", " (attrNames secret.recipients)}"
         echo ""
-        echo "Operations:"
+        echo "Available operations:"
         ${concatStringsSep "\n" (map (cmd: ''echo "  nix run .#secrets.${secretName}.${cmd}"'') opNames)}
       '';
     };
