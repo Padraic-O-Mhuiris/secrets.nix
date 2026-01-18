@@ -93,9 +93,22 @@
               - ${ageKeysList}
   '';
 
-  initPkg = pkgs:
+  decryptPkg = pkgs:
     pkgs.writeShellApplication {
-      name = "secret-init-${name}";
+      name = "secret-decrypt-${name}";
+      runtimeInputs = [pkgs.sops];
+      text = ''
+        ${secretExistsContext pkgs}
+
+        sops --config <(cat <<'SOPS_CONFIG'
+        ${sopsConfig}SOPS_CONFIG
+        ) -d --input-type binary --output-type binary "$SECRET_PATH"
+      '';
+    };
+
+  encryptPkg = pkgs:
+    pkgs.writeShellApplication {
+      name = "secret-encrypt-${name}";
       runtimeInputs = [pkgs.sops];
       text = ''
         ${secretNotExistsContext pkgs}
@@ -151,11 +164,18 @@ in {
       description = "Operation: checks if the secret file is properly encrypted";
     };
 
-    init = mkOption {
+    encrypt = mkOption {
       type = types.functionTo types.package;
       readOnly = true;
-      default = initPkg;
+      default = encryptPkg;
       description = "Operation: creates a new encrypted secret (fails if file already exists)";
+    };
+
+    decrypt = mkOption {
+      type = types.functionTo types.package;
+      readOnly = true;
+      default = decryptPkg;
+      description = "Operation: decrypts and outputs secret data to stdout";
     };
   };
 }
