@@ -93,18 +93,10 @@
               - ${ageKeysList}
   '';
 
-  decryptPkg = pkgs:
-    pkgs.writeShellApplication {
-      name = "secret-decrypt-${name}";
-      runtimeInputs = [pkgs.sops];
-      text = ''
-        ${secretExistsContext pkgs}
-
-        sops --config <(cat <<'SOPS_CONFIG'
-        ${sopsConfig}SOPS_CONFIG
-        ) -d --input-type binary --output-type binary "$SECRET_PATH"
-      '';
-    };
+  # Import decrypt operation
+  decryptPkg = import ./decrypt.nix {
+    inherit lib name sopsConfig secretExistsContext;
+  };
 
   encryptPkg = pkgs:
     pkgs.writeShellApplication {
@@ -175,7 +167,7 @@ in {
       type = types.functionTo types.package;
       readOnly = true;
       default = decryptPkg;
-      description = "Operation: decrypts and outputs secret data to stdout";
+      description = "Operation: decrypts and outputs secret data to stdout. Supports: .withSopsAgeKeyCmd, .withSopsAgeKeyCmdPkg, .buildSopsAgeKeyCmdPkg";
     };
   };
 }
