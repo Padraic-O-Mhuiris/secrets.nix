@@ -16,9 +16,12 @@
   lib,
   name,
   config,
-  settings,
 }: let
   inherit (lib) mkOption types;
+
+  # Use derived properties from config
+  fileName = config._fileName;
+  storePath = toString config._path;
 
   # Map short format names to sops format names
   sopsFormat = {
@@ -94,26 +97,16 @@
   # ============================================================================
   # INIT OPERATION
   # Creates a new encrypted secret. Does not require decryption.
+  # Outputs to current directory with filename only.
   # ============================================================================
-  mkInit = pkgs: let
-    rootPkg = settings.root.mkPackage pkgs;
-  in
+  mkInit = pkgs:
     pkgs.writeShellApplication {
       name = "secret-init-${name}";
       runtimeInputs = [pkgs.sops];
       text = ''
         ${sopsConfigSetup}
 
-        # Determine output directory from argument or use configured default
-        OUTPUT_DIR="''${1:-.}"
-
-        # If output dir is relative, resolve against project root
-        if [[ "$OUTPUT_DIR" != /* ]]; then
-          ROOT_DIR="$(${rootPkg}/bin/secret-root)"
-          OUTPUT_DIR="$ROOT_DIR/$OUTPUT_DIR"
-        fi
-
-        OUTPUT_PATH="$OUTPUT_DIR/${config._fileName}"
+        OUTPUT_PATH="./${fileName}"
 
         # Check if file already exists
         if [[ -f "$OUTPUT_PATH" ]]; then
@@ -121,14 +114,10 @@
           exit 1
         fi
 
-        # Ensure directory exists
-        mkdir -p "$(dirname "$OUTPUT_PATH")"
-
-        # Read content from stdin or argument
+        # Read content from stdin
         if [[ -t 0 ]]; then
-          # No stdin, check for content argument
-          echo "Error: No content provided. Pipe content to stdin or provide as argument." >&2
-          echo "Usage: echo 'content' | nix run .#secrets.${name}.init [output-dir]" >&2
+          echo "Error: No content provided. Pipe content to stdin." >&2
+          echo "Usage: echo 'content' | nix run .#secrets.${name}.init" >&2
           exit 1
         fi
 
@@ -155,195 +144,164 @@
     resolved = resolveKeyCmd pkgs keyCmd;
     fmtCfg = formatConfig pkgs;
   in
-    if !config._existsInStore
-    then throw "Secret '${name}' does not exist at ${toString config._storePath}. Create it with the init operation first."
-    else
-      pkgs.writeShellApplication {
-        name = "secret-decrypt-${name}";
-        runtimeInputs = [pkgs.sops] ++ fmtCfg.runtimeInputs ++ (lib.optional (resolved.pkg != null) resolved.pkg);
-        text = ''
-          ${keySetupCode resolved.cmd}
-          ${sopsConfigSetup}
+    pkgs.writeShellApplication {
+      name = "secret-decrypt-${name}";
+      runtimeInputs = [pkgs.sops] ++ fmtCfg.runtimeInputs ++ (lib.optional (resolved.pkg != null) resolved.pkg);
+      text = ''
+        ${keySetupCode resolved.cmd}
+        ${sopsConfigSetup}
 
-          sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -d "${config._storePath}"${fmtCfg.pipe}
-        '';
-      };
+        if [[ ! -f "${storePath}" ]]; then
+          echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
+          exit 1
+        fi
+
+        sops --config <(echo "$SOPS_CONFIG") \
+             --input-type ${sopsFormat} --output-type ${sopsFormat} \
+             -d "${storePath}"${fmtCfg.pipe}
+      '';
+    };
 
   # ============================================================================
   # EDIT OPERATION
   # Decrypts secret, opens in $EDITOR, re-encrypts to local file.
+  # Outputs to current directory with filename only.
   # ============================================================================
   mkEdit = {keyCmd ? null}: pkgs: let
     resolved = resolveKeyCmd pkgs keyCmd;
-    rootPkg = settings.root.mkPackage pkgs;
   in
-    if !config._existsInStore
-    then throw "Secret '${name}' does not exist at ${toString config._storePath}. Create it with the init operation first."
-    else
-      pkgs.writeShellApplication {
-        name = "secret-edit-${name}";
-        runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
-        text = ''
-          ${keySetupCode resolved.cmd}
-          ${sopsConfigSetup}
+    pkgs.writeShellApplication {
+      name = "secret-edit-${name}";
+      runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
+      text = ''
+        ${keySetupCode resolved.cmd}
+        ${sopsConfigSetup}
 
-          # Determine output directory from argument or use configured default
-          OUTPUT_DIR="''${1:-${config.dir}}"
+        if [[ ! -f "${storePath}" ]]; then
+          echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
+          exit 1
+        fi
 
-          # If output dir is relative, resolve against project root
-          if [[ "$OUTPUT_DIR" != /* ]]; then
-            ROOT_DIR="$(${rootPkg}/bin/secret-root)"
-            OUTPUT_DIR="$ROOT_DIR/$OUTPUT_DIR"
-          fi
+        OUTPUT_PATH="./${fileName}"
 
-          OUTPUT_PATH="$OUTPUT_DIR/${config._fileName}"
+        # Decrypt to temp file
+        TEMP_FILE=$(mktemp)
+        trap 'rm -f "$TEMP_FILE"' EXIT
 
-          # Ensure directory exists
-          mkdir -p "$(dirname "$OUTPUT_PATH")"
+        sops --config <(echo "$SOPS_CONFIG") \
+             --input-type ${sopsFormat} --output-type ${sopsFormat} \
+             -d "${storePath}" > "$TEMP_FILE"
 
-          # Decrypt to temp file
-          TEMP_FILE=$(mktemp)
-          trap 'rm -f "$TEMP_FILE"' EXIT
+        # Open in editor
+        ''${EDITOR:-vi} "$TEMP_FILE"
 
-          sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -d "${config._storePath}" > "$TEMP_FILE"
-
-          # Open in editor
-          ''${EDITOR:-vi} "$TEMP_FILE"
-
-          # Re-encrypt
-          if sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -e "$TEMP_FILE" > "$OUTPUT_PATH"; then
-            echo "Updated: $OUTPUT_PATH" >&2
-          else
-            echo "Error: Failed to re-encrypt secret" >&2
-            exit 1
-          fi
-        '';
-      };
+        # Re-encrypt
+        if sops --config <(echo "$SOPS_CONFIG") \
+             --input-type ${sopsFormat} --output-type ${sopsFormat} \
+             -e "$TEMP_FILE" > "$OUTPUT_PATH"; then
+          echo "Updated: $OUTPUT_PATH" >&2
+        else
+          echo "Error: Failed to re-encrypt secret" >&2
+          exit 1
+        fi
+      '';
+    };
 
   # ============================================================================
   # ROTATE OPERATION
-  # Decrypts secret, accepts new content, re-encrypts to local file.
+  # Accepts new content and encrypts to local file.
+  # Outputs to current directory with filename only.
   # ============================================================================
   mkRotate = {keyCmd ? null}: pkgs: let
     resolved = resolveKeyCmd pkgs keyCmd;
-    rootPkg = settings.root.mkPackage pkgs;
   in
-    if !config._existsInStore
-    then throw "Secret '${name}' does not exist at ${toString config._storePath}. Create it with the init operation first."
-    else
-      pkgs.writeShellApplication {
-        name = "secret-rotate-${name}";
-        runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
-        text = ''
-          ${keySetupCode resolved.cmd}
-          ${sopsConfigSetup}
+    pkgs.writeShellApplication {
+      name = "secret-rotate-${name}";
+      runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
+      text = ''
+        ${keySetupCode resolved.cmd}
+        ${sopsConfigSetup}
 
-          # Parse arguments: content from stdin/arg/file, output dir is last arg
-          CONTENT=""
-          OUTPUT_DIR="${config.dir}"
+        if [[ ! -f "${storePath}" ]]; then
+          echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
+          exit 1
+        fi
 
-          # Priority: stdin > file arg > string arg
-          if [[ ! -t 0 ]]; then
-            # Read from stdin
-            CONTENT=$(cat)
-            OUTPUT_DIR="''${1:-${config.dir}}"
-          elif [[ $# -gt 0 ]]; then
-            FIRST_ARG="$1"
+        OUTPUT_PATH="./${fileName}"
+        CONTENT=""
 
-            # Check if first arg is a file
-            if [[ -f "$FIRST_ARG" ]]; then
-              CONTENT=$(cat "$FIRST_ARG")
-              OUTPUT_DIR="''${2:-${config.dir}}"
-            else
-              # First arg is content string
-              CONTENT="$FIRST_ARG"
-              OUTPUT_DIR="''${2:-${config.dir}}"
-            fi
+        # Priority: stdin > file arg > string arg
+        if [[ ! -t 0 ]]; then
+          # Read from stdin
+          CONTENT=$(cat)
+        elif [[ $# -gt 0 ]]; then
+          FIRST_ARG="$1"
+
+          # Check if first arg is a file
+          if [[ -f "$FIRST_ARG" ]]; then
+            CONTENT=$(cat "$FIRST_ARG")
           else
-            echo "Error: No content provided." >&2
-            echo "Usage: echo 'content' | nix run .#secrets.${name}.rotate [output-dir]" >&2
-            echo "       nix run .#secrets.${name}.rotate 'content' [output-dir]" >&2
-            echo "       nix run .#secrets.${name}.rotate ./file.json [output-dir]" >&2
-            exit 1
+            # First arg is content string
+            CONTENT="$FIRST_ARG"
           fi
+        else
+          echo "Error: No content provided." >&2
+          echo "Usage: echo 'content' | nix run .#secrets.${name}.rotate" >&2
+          echo "       nix run .#secrets.${name}.rotate 'content'" >&2
+          echo "       nix run .#secrets.${name}.rotate ./file.json" >&2
+          exit 1
+        fi
 
-          # If output dir is relative, resolve against project root
-          if [[ "$OUTPUT_DIR" != /* ]]; then
-            ROOT_DIR="$(${rootPkg}/bin/secret-root)"
-            OUTPUT_DIR="$ROOT_DIR/$OUTPUT_DIR"
-          fi
-
-          OUTPUT_PATH="$OUTPUT_DIR/${config._fileName}"
-
-          # Ensure directory exists
-          mkdir -p "$(dirname "$OUTPUT_PATH")"
-
-          # Encrypt new content
-          if echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -e /dev/stdin > "$OUTPUT_PATH"; then
-            echo "Rotated: $OUTPUT_PATH" >&2
-          else
-            echo "Error: Failed to encrypt secret" >&2
-            exit 1
-          fi
-        '';
-      };
+        # Encrypt new content
+        if echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
+             --input-type ${sopsFormat} --output-type ${sopsFormat} \
+             -e /dev/stdin > "$OUTPUT_PATH"; then
+          echo "Rotated: $OUTPUT_PATH" >&2
+        else
+          echo "Error: Failed to encrypt secret" >&2
+          exit 1
+        fi
+      '';
+    };
 
   # ============================================================================
   # REKEY OPERATION
   # Decrypts secret, re-encrypts with current recipients. Content unchanged.
+  # Outputs to current directory with filename only.
   # ============================================================================
   mkRekey = {keyCmd ? null}: pkgs: let
     resolved = resolveKeyCmd pkgs keyCmd;
-    rootPkg = settings.root.mkPackage pkgs;
   in
-    if !config._existsInStore
-    then throw "Secret '${name}' does not exist at ${toString config._storePath}. Create it with the init operation first."
-    else
-      pkgs.writeShellApplication {
-        name = "secret-rekey-${name}";
-        runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
-        text = ''
-          ${keySetupCode resolved.cmd}
-          ${sopsConfigSetup}
+    pkgs.writeShellApplication {
+      name = "secret-rekey-${name}";
+      runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
+      text = ''
+        ${keySetupCode resolved.cmd}
+        ${sopsConfigSetup}
 
-          # Determine output directory from argument or use configured default
-          OUTPUT_DIR="''${1:-${config.dir}}"
+        if [[ ! -f "${storePath}" ]]; then
+          echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
+          exit 1
+        fi
 
-          # If output dir is relative, resolve against project root
-          if [[ "$OUTPUT_DIR" != /* ]]; then
-            ROOT_DIR="$(${rootPkg}/bin/secret-root)"
-            OUTPUT_DIR="$ROOT_DIR/$OUTPUT_DIR"
-          fi
+        OUTPUT_PATH="./${fileName}"
 
-          OUTPUT_PATH="$OUTPUT_DIR/${config._fileName}"
+        # Decrypt from store
+        DECRYPTED=$(sops --config <(echo "$SOPS_CONFIG") \
+             --input-type ${sopsFormat} --output-type ${sopsFormat} \
+             -d "${storePath}")
 
-          # Ensure directory exists
-          mkdir -p "$(dirname "$OUTPUT_PATH")"
-
-          # Decrypt from store
-          DECRYPTED=$(sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -d "${config._storePath}")
-
-          # Re-encrypt with current recipients
-          if echo -n "$DECRYPTED" | sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -e /dev/stdin > "$OUTPUT_PATH"; then
-            echo "Rekeyed: $OUTPUT_PATH" >&2
-          else
-            echo "Error: Failed to re-encrypt secret" >&2
-            exit 1
-          fi
-        '';
-      };
+        # Re-encrypt with current recipients
+        if echo -n "$DECRYPTED" | sops --config <(echo "$SOPS_CONFIG") \
+             --input-type ${sopsFormat} --output-type ${sopsFormat} \
+             -e /dev/stdin > "$OUTPUT_PATH"; then
+          echo "Rekeyed: $OUTPUT_PATH" >&2
+        else
+          echo "Error: Failed to re-encrypt secret" >&2
+          exit 1
+        fi
+      '';
+    };
 
   # ============================================================================
   # BUILDER PATTERN
@@ -380,41 +338,50 @@
   rotatePkg = pkgs: mkBuilderPkg mkRotate {keyCmd = null;} pkgs;
   rekeyPkg = pkgs: mkBuilderPkg mkRekey {keyCmd = null;} pkgs;
 
+  # Conditional operation options based on whether secret exists
+  # When secret exists: decrypt, edit, rotate, rekey available
+  # When secret doesn't exist: only init available
+  exists = config._exists;
+
 in {
-  options = {
-    decrypt = mkOption {
-      type = types.functionTo types.package;
-      readOnly = true;
-      default = decryptPkg;
-      description = "Decrypts secret from store and outputs to stdout. Supports builder methods: .withSopsAgeKeyCmd, .withSopsAgeKeyCmdPkg, .buildSopsAgeKeyCmdPkg";
-    };
+  options =
+    # Operations available when secret EXISTS (decrypt, edit, rotate, rekey)
+    lib.optionalAttrs exists {
+      decrypt = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default = decryptPkg;
+        description = "Decrypts secret from store and outputs to stdout. Supports builder methods: .withSopsAgeKeyCmd, .withSopsAgeKeyCmdPkg, .buildSopsAgeKeyCmdPkg";
+      };
 
-    edit = mkOption {
-      type = types.functionTo types.package;
-      readOnly = true;
-      default = editPkg;
-      description = "Decrypts secret, opens in $EDITOR, re-encrypts to local file. Supports builder methods.";
-    };
+      edit = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default = editPkg;
+        description = "Decrypts secret, opens in $EDITOR, re-encrypts to current directory. Supports builder methods.";
+      };
 
-    rotate = mkOption {
-      type = types.functionTo types.package;
-      readOnly = true;
-      default = rotatePkg;
-      description = "Accepts new content and encrypts to local file. Supports builder methods.";
-    };
+      rotate = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default = rotatePkg;
+        description = "Accepts new content and encrypts to current directory. Supports builder methods.";
+      };
 
-    rekey = mkOption {
-      type = types.functionTo types.package;
-      readOnly = true;
-      default = rekeyPkg;
-      description = "Decrypts and re-encrypts with current recipients. Content unchanged. Supports builder methods.";
+      rekey = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default = rekeyPkg;
+        description = "Decrypts and re-encrypts with current recipients. Content unchanged. Supports builder methods.";
+      };
+    }
+    # Operation available when secret DOES NOT EXIST (init only)
+    // lib.optionalAttrs (!exists) {
+      init = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default = mkInit;
+        description = "Creates a new encrypted secret. Does not require decryption - only uses public keys.";
+      };
     };
-
-    init = mkOption {
-      type = types.functionTo types.package;
-      readOnly = true;
-      default = mkInit;
-      description = "Creates a new encrypted secret. Does not require decryption - only uses public keys.";
-    };
-  };
 }

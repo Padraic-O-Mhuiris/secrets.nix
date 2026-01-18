@@ -5,6 +5,14 @@
   # Age public key regex pattern
   ageKeyPattern = "age1[a-z0-9]{58}";
 
+  # Format to file extension mapping
+  formatExtension = {
+    bin = "";
+    json = ".json";
+    yaml = ".yaml";
+    env = ".env";
+  };
+
   # Recipient submodule
   recipientModule = {
     options = {
@@ -22,65 +30,22 @@
     };
   };
 
-  # Root settings submodule
-  rootModule = {
-    options = {
-      envVarName = mkOption {
-        type = types.str;
-        default = "SECRET_ROOT_DIR";
-        description = "Environment variable name for the secrets root directory";
-      };
-
-      mkPackage = mkOption {
-        type = types.functionTo types.package;
-        description = "Builder function that produces a derivation to find the project root at runtime";
-        default = pkgs:
-          pkgs.writeShellApplication {
-            name = "secret-root";
-            runtimeInputs = [pkgs.gitMinimal];
-            text = ''
-              git rev-parse --show-toplevel
-            '';
-          };
-      };
-    };
-  };
-
-  # Settings submodule
-  settingsModule = {
-    options = {
-      root = mkOption {
-        type = types.submodule rootModule;
-        default = {};
-        description = "Root directory settings";
-      };
-
-      dir = mkOption {
-        type = types.str;
-        default = "secrets";
-        description = "Default directory for secret files (relative to project root)";
-      };
-    };
-  };
-
   # Secret submodule
-  secretModule = settings: {
+  secretModule = {
     name,
     config,
-    self,
     ...
   }: {
     options = {
+      dir = mkOption {
+        type = types.path;
+        description = "Directory containing the encrypted secret file (relative to where it's declared)";
+      };
+
       recipients = mkOption {
         type = types.attrsOf (types.submodule recipientModule);
         default = {};
         description = "Recipients who can decrypt this secret";
-      };
-
-      dir = mkOption {
-        type = types.str;
-        default = settings.dir;
-        description = "Directory for secret file (relative to project root)";
       };
 
       format = mkOption {
@@ -89,48 +54,31 @@
         description = "Secret file format (used by sops for encryption/decryption)";
       };
 
+      # Derived properties (read-only)
       _fileName = mkOption {
         type = types.str;
-        internal = true;
         readOnly = true;
-        default = let
-          ext = {
-            bin = "";
-            json = ".json";
-            yaml = ".yaml";
-            env = ".env";
-          }.${config.format};
-        in "${name}${ext}";
-        description = "Secret filename with format extension";
+        default = "${name}${formatExtension.${config.format}}";
+        description = "Derived filename: <name><extension>";
       };
 
-      _runtimePath = mkOption {
-        type = types.str;
-        internal = true;
-        readOnly = true;
-        default = "\$${settings.root.envVarName}/${config.dir}/${config._fileName}";
-        description = "Runtime path using environment variable";
-      };
-
-      _storePath = mkOption {
+      _path = mkOption {
         type = types.path;
-        internal = true;
         readOnly = true;
-        default = self + "/${config.dir}/${config._fileName}";
-        description = "Nix store path to the secret file";
+        default = config.dir + "/${config._fileName}";
+        description = "Derived full path: <dir>/<_fileName>";
       };
 
-      _existsInStore = mkOption {
+      _exists = mkOption {
         type = types.bool;
-        internal = true;
         readOnly = true;
-        default = builtins.pathExists config._storePath;
-        description = "Whether the secret file exists in the store";
+        default = builtins.pathExists config._path;
+        description = "Whether the secret file exists at the derived path";
       };
 
       # Package operations submodule
       __operations = mkOption {
-        type = types.submodule (import ./operations {inherit lib name config settings;});
+        type = types.submodule (import ./operations {inherit lib name config;});
         internal = true;
         readOnly = true;
         default = {};
@@ -140,20 +88,11 @@
   };
 in {
   # Evaluate a secrets configuration
-  mkSecrets = {
-    self, # flake self reference for store paths
-    settings ? {},
-  }: secrets: let
-    evaluatedSettings =
-      (lib.evalModules {
-        modules = [settingsModule {config = settings;}];
-      })
-      .config;
-  in
+  mkSecrets = secrets:
     lib.mapAttrs (name: secretDef:
       (lib.evalModules {
-        modules = [(secretModule evaluatedSettings) {config = secretDef;}];
-        specialArgs = {inherit self name;};
+        modules = [secretModule {config = secretDef;}];
+        specialArgs = {inherit name;};
       })
       .config)
     secrets;

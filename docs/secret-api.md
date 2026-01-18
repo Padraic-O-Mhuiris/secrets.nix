@@ -11,9 +11,9 @@ A secret is defined declaratively with:
 ```nix
 {
   my-secret = {
+    dir = ./secrets;       # Directory where the secret file lives
     recipients = { ... };  # Who can decrypt
     format = "json";       # bin | json | yaml | env
-    dir = "secrets";       # Relative directory (for project operations)
   };
 }
 ```
@@ -25,8 +25,8 @@ From the definition, several properties are computed:
 | Property | Description | Example |
 |----------|-------------|---------|
 | `_fileName` | Name with format extension | `my-secret.json` |
-| `_storePath` | Nix store path to encrypted file | `/nix/store/...-source/secrets/my-secret.json` |
-| `_existsInStore` | Whether the file exists in store | `true` / `false` |
+| `_path` | Full path to encrypted file | `./secrets/my-secret.json` |
+| `_exists` | Whether the file exists | `true` / `false` |
 
 ### Format Mapping
 
@@ -39,19 +39,30 @@ From the definition, several properties are computed:
 
 ## Operations
 
+### Conditional Availability
+
+Operations are conditionally available based on whether the secret file exists:
+
+| When `_exists` is... | Available Operations |
+|----------------------|----------------------|
+| `false` | `init` only |
+| `true` | `decrypt`, `edit`, `rotate`, `rekey` |
+
 ### Overview
 
 | Operation | Input Source | Output | Needs Private Key? |
 |-----------|--------------|--------|-------------------|
-| `decrypt` | store path | stdout | Yes |
-| `edit` | store path | `<name>.<ext>` file | Yes |
-| `rotate` | store path + new content | `<name>.<ext>` file | Yes |
-| `rekey` | store path | `<name>.<ext>` file | Yes |
-| `init` | new content | `<name>.<ext>` file | No |
+| `decrypt` | `_path` | stdout | Yes |
+| `edit` | `_path` | `./<_fileName>` | Yes |
+| `rotate` | `_path` + new content | `./<_fileName>` | Yes |
+| `rekey` | `_path` | `./<_fileName>` | Yes |
+| `init` | new content | `./<_fileName>` | No |
+
+All write operations output to the **current directory** with the derived filename. The user is responsible for moving the file to the correct location (`dir`) and committing to git.
 
 ### decrypt
 
-Decrypts the secret from the nix store and outputs to stdout.
+Decrypts the secret and outputs to stdout.
 
 ```bash
 # Basic usage
@@ -61,29 +72,26 @@ nix run .#secrets.my-secret.decrypt
 nix run .#secrets.my-secret.decrypt.withSopsAgeKeyCmd "op read op://vault/age-key"
 ```
 
-- **Input**: Encrypted file from `_storePath`
+- **Input**: Encrypted file from `_path`
 - **Output**: Decrypted content to stdout, piped through format-specific tool (jq/yq)
 - **Requires**: Private key access
 
 ### edit
 
-Decrypts the secret, opens in `$EDITOR`, and re-encrypts to a local file.
+Decrypts the secret, opens in `$EDITOR`, and re-encrypts.
 
 ```bash
-# Opens editor, saves to ./my-secret.json
+# Opens editor, saves to ./my-secret.json in current directory
 nix run .#secrets.my-secret.edit
-
-# Specify output directory
-nix run .#secrets.my-secret.edit ./secrets/
 ```
 
-- **Input**: Encrypted file from `_storePath`
-- **Output**: Re-encrypted file at `<dir>/<name>.<ext>`
+- **Input**: Encrypted file from `_path`
+- **Output**: Re-encrypted file at `./<_fileName>`
 - **Requires**: Private key access, `$EDITOR`
 
 ### rotate
 
-Decrypts the secret, accepts new content, and re-encrypts to a local file.
+Accepts new content and encrypts.
 
 ```bash
 # From stdin
@@ -96,8 +104,8 @@ nix run .#secrets.my-secret.rotate '{"key": "new-value"}'
 nix run .#secrets.my-secret.rotate ./new-content.json
 ```
 
-- **Input**: Encrypted file from `_storePath` + new content (stdin/arg/file)
-- **Output**: Re-encrypted file at `<dir>/<name>.<ext>`
+- **Input**: Encrypted file from `_path` + new content (stdin/arg/file)
+- **Output**: Re-encrypted file at `./<_fileName>`
 - **Requires**: Private key access
 
 ### rekey
@@ -111,28 +119,31 @@ nix run .#secrets.my-secret.rekey
 
 Use case: Recipients have changed in the nix configuration, and you need to update the encrypted file to reflect the new access list.
 
-- **Input**: Encrypted file from `_storePath`
-- **Output**: Re-encrypted file at `<dir>/<name>.<ext>` with updated recipients
+- **Input**: Encrypted file from `_path`
+- **Output**: Re-encrypted file at `./<_fileName>` with updated recipients
 - **Requires**: Private key access
 
 ### init
 
-Creates a new encrypted secret. Does not require decryption.
+Creates a new encrypted secret. Does not require decryption. Only available when the secret file doesn't exist yet.
 
 ```bash
 # From stdin
 echo '{"key": "value"}' | nix run .#secrets.my-secret.init
-
-# From argument
-nix run .#secrets.my-secret.init '{"key": "value"}'
-
-# Specify output directory
-echo "content" | nix run .#secrets.my-secret.init ./secrets/
 ```
 
-- **Input**: Plaintext content (stdin/arg)
-- **Output**: Encrypted file at `<dir>/<name>.<ext>`
+- **Input**: Plaintext content (stdin)
+- **Output**: Encrypted file at `./<_fileName>`
 - **Requires**: Only public keys (recipients)
+
+After running `init`, move the file to the correct location and commit:
+
+```bash
+echo '{"key": "value"}' | nix run .#secrets.my-secret.init
+mv my-secret.json secrets/
+git add secrets/my-secret.json
+git commit -m "add my-secret"
+```
 
 ## Key Configuration Builders
 
@@ -185,7 +196,7 @@ The key command (whether string, derivation, or built) must:
 
 ### Input (Decryption Source)
 
-All decrypt-dependent operations read from the nix store path (`_storePath`). This enables:
+All decrypt-dependent operations read from `_path` (which becomes a nix store path when evaluated). This enables:
 
 - Distribution: `nix run github:user/repo#secrets.x.decrypt` works
 - Caching: Content-addressed, deterministic
@@ -193,18 +204,19 @@ All decrypt-dependent operations read from the nix store path (`_storePath`). Th
 
 ### Output (Encryption Target)
 
-All write operations output to `<dir>/<name>.<ext>`:
+All write operations output to the current directory with the derived filename (`./<_fileName>`).
 
-- `<dir>`: Specified as argument, defaults to current directory
-- `<name>`: Secret name from definition
-- `<ext>`: Determined by format (`.json`, `.yaml`, `.env`, or none for `bin`)
+The user workflow is:
+1. Run the operation (outputs to current directory)
+2. Move the file to the correct location (`dir`)
+3. Commit to git
 
 ```bash
-# Outputs to ./my-secret.json
-nix run .#secrets.my-secret.init '{"key": "value"}'
-
-# Outputs to ./secrets/my-secret.json
-nix run .#secrets.my-secret.init '{"key": "value"}' ./secrets/
+# Example: create and commit a new secret
+echo '{"key": "value"}' | nix run .#secrets.my-secret.init
+mv my-secret.json secrets/
+git add secrets/my-secret.json
+git commit -m "add my-secret"
 ```
 
 ## Decryption Strategy for Mutating Operations
@@ -236,7 +248,7 @@ Each mutating operation exposes the same key configuration builders:
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Decrypt from Store                          │
-│  sops -d --input-type <fmt> --output-type <fmt> <_storePath>    │
+│  sops -d --input-type <fmt> --output-type <fmt> <_path>         │
 │                                                                  │
 │  SOPS_AGE_KEY_CMD set from builder config                       │
 └─────────────────────────────────────────────────────────────────┘
@@ -255,35 +267,6 @@ Each mutating operation exposes the same key configuration builders:
          └────────┘     └──────────┘    └──────────┘    └──────────┘
 ```
 
-### Shared Decryption Logic
-
-Internally, `edit`, `rotate`, and `rekey` can reuse the same decryption mechanism:
-
-```bash
-# Pseudocode for all mutating operations
-decrypt_content() {
-  sops --config <(echo "$SOPS_CONFIG") \
-       --input-type "$FORMAT" \
-       --output-type "$FORMAT" \
-       -d "$STORE_PATH"
-}
-
-encrypt_to_file() {
-  local content="$1"
-  local output_path="$2"
-  echo -n "$content" | sops --config <(echo "$SOPS_CONFIG") \
-                            --input-type "$FORMAT" \
-                            --output-type "$FORMAT" \
-                            -e /dev/stdin > "$output_path"
-}
-```
-
-### Why Same Builders?
-
-1. **Consistency**: Same key works for reading and writing your secrets
-2. **Simplicity**: One mental model for key configuration
-3. **Composability**: Can build higher-level tooling that combines operations
-
 ### No Key Needed for Encryption
 
 Note that only the *decryption* phase needs the private key. The re-encryption phase uses only the public keys (recipients) which are baked into the sops config at build time.
@@ -296,34 +279,6 @@ decrypt: private key required
 encrypt: public keys only (from recipients config)
 ```
 
-### Example: CI Rotation Script
-
-```nix
-packages.rotate-db-password = let
-  secret = flake.secrets.db-password;
-  keyCmd = "cat /run/secrets/ci-age-key";
-in pkgs.writeShellApplication {
-  name = "rotate-db-password";
-  runtimeInputs = [ pkgs.openssl ];
-  text = ''
-    NEW_PASS=$(openssl rand -base64 32)
-    echo "$NEW_PASS" | ${lib.getExe (secret.rotate pkgs).withSopsAgeKeyCmd keyCmd} ./secrets/
-    echo "Rotated db-password"
-  '';
-};
-```
-
-### Example: Interactive Edit
-
-```bash
-# Developer uses their personal key command
-export SOPS_AGE_KEY_CMD="op read op://Private/age-key/secret"
-nix run .#secrets.api-config.edit ./secrets/
-
-# Or inline
-nix run '.#secrets.api-config.edit.withSopsAgeKeyCmd "pass show age/dev"' ./secrets/
-```
-
 ### Fallback Behavior
 
 If no builder is used, the operation relies on sops' default key resolution:
@@ -331,16 +286,6 @@ If no builder is used, the operation relies on sops' default key resolution:
 1. `SOPS_AGE_KEY_CMD` environment variable
 2. `SOPS_AGE_KEY` environment variable
 3. `~/.config/sops/age/keys.txt`
-
-This allows flexible usage:
-
-```bash
-# Works if SOPS_AGE_KEY_CMD is set in environment
-nix run .#secrets.my-secret.edit ./secrets/
-
-# Or explicitly configured
-nix run '.#secrets.my-secret.edit.withSopsAgeKeyCmd "..."' ./secrets/
-```
 
 ## Security Model
 
@@ -366,11 +311,15 @@ The encrypted file in the nix store is safe:
 ### Development Workflow
 
 ```bash
-# Create a new secret
-echo '{"api_key": "secret123"}' | nix run .#secrets.api-key.init ./secrets/
+# Create a new secret (only available when secret doesn't exist)
+echo '{"api_key": "secret123"}' | nix run .#secrets.api-key.init
+mv api-key.json secrets/
+git add secrets/api-key.json
 
 # Edit an existing secret
-nix run .#secrets.api-key.edit ./secrets/
+nix run .#secrets.api-key.edit
+mv api-key.json secrets/
+git add secrets/api-key.json
 
 # Decrypt for use in scripts
 API_KEY=$(nix run .#secrets.api-key.decrypt | jq -r .api_key)
@@ -393,7 +342,8 @@ packages.deploy = pkgs.writeShellApplication {
 
 ```bash
 # After updating recipients in nix config:
-nix run .#secrets.api-key.rekey ./secrets/
+nix run .#secrets.api-key.rekey
+mv api-key.json secrets/
 git add secrets/api-key.json
 git commit -m "rekey api-key with updated recipients"
 ```
@@ -403,5 +353,7 @@ git commit -m "rekey api-key with updated recipients"
 ```bash
 # Generate new secret and rotate
 NEW_KEY=$(openssl rand -hex 32)
-echo "{\"api_key\": \"$NEW_KEY\"}" | nix run .#secrets.api-key.rotate ./secrets/
+echo "{\"api_key\": \"$NEW_KEY\"}" | nix run .#secrets.api-key.rotate
+mv api-key.json secrets/
+git add secrets/api-key.json
 ```
