@@ -1,31 +1,17 @@
-# Create a "secrets" package with nested passthru: secrets.<secret>.<operation>
+# Create a "secrets" package with nested passthru: secrets.<secret>.ops.<operation>
 {lib}: evaluatedSecrets: pkgs: let
-  inherit (lib) mapAttrs mapAttrs' attrNames concatStringsSep nameValuePair;
-
-  # Convert "mkFindLocalSecret" -> "findLocalSecret"
-  uncapitalizeFirst = str: let
-    first = lib.substring 0 1 str;
-    rest = lib.substring 1 (-1) str;
-  in
-    (lib.toLower first) + rest;
+  inherit (lib) mapAttrs attrNames concatStringsSep;
 
   # Get operation names for display
-  operationNames = secret:
-    map (n: uncapitalizeFirst (lib.removePrefix "mk" n)) (attrNames secret.__operations);
+  operationNames = secret: attrNames secret.__operations;
 
   # Build operation packages from __operations for a single secret
-  mkOperationPackages = secret:
-    mapAttrs' (
-      builderName: builderFn:
-        nameValuePair
-        (uncapitalizeFirst (lib.removePrefix "mk" builderName))
-        (builderFn pkgs)
-    )
-    secret.__operations;
+  buildOperationPackages = secret:
+    mapAttrs (_name: builderFn: builderFn pkgs) secret.__operations;
 
   # Create a secret package with passthru to its operations
   mkSecretPackage = secretName: secret: let
-    operations = mkOperationPackages secret;
+    operations = buildOperationPackages secret;
     opNames = operationNames secret;
 
     # Wrapper package for ops namespace
