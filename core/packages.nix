@@ -1,4 +1,14 @@
-# Create a "secrets" package with nested passthru: secrets.<secret>.ops.<operation>
+# Create a "secrets" package with nested passthru: secrets.<secret>.<operation>
+#
+# Structure:
+#   secrets                         # Top-level package (lists all secrets)
+#   secrets.<name>                  # Secret info package
+#   secrets.<name>.decrypt          # Decrypt operation
+#   secrets.<name>.edit             # Edit operation
+#   secrets.<name>.rotate           # Rotate operation
+#   secrets.<name>.rekey            # Rekey operation
+#   secrets.<name>.init             # Init operation
+#
 {lib}: evaluatedSecrets: pkgs: let
   inherit (lib) mapAttrs attrNames concatStringsSep;
 
@@ -14,38 +24,24 @@
     operations = buildOperationPackages secret;
     opNames = operationNames secret;
 
-    # Wrapper package for ops namespace
-    opsPackage = pkgs.writeShellApplication {
-      name = "secret-${secretName}-ops";
-      text = ''
-        echo "Operations for secret: ${secretName}"
-        echo ""
-        echo "Available:"
-        ${concatStringsSep "\n" (map (cmd: ''echo "  - ${cmd}"'') opNames)}
-      '';
-    };
-
-    ops = opsPackage.overrideAttrs (old: {
-      passthru = (old.passthru or {}) // operations;
-    });
-
     base = pkgs.writeShellApplication {
       name = "secret-${secretName}";
       text = ''
         echo "Secret: ${secretName}"
         echo ""
-        # shellcheck disable=SC2016
-        echo 'Path: ${secret._runtimePath}'
+        echo "Format: ${secret.format}"
+        echo "Dir: ${secret.dir}"
+        echo "File: ${secret._fileName}"
         echo ""
         echo "Recipients: ${concatStringsSep ", " (attrNames secret.recipients)}"
         echo ""
-        echo "Operations: .ops.<cmd>"
-        ${concatStringsSep "\n" (map (cmd: ''echo "  - ${cmd}"'') opNames)}
+        echo "Operations:"
+        ${concatStringsSep "\n" (map (cmd: ''echo "  nix run .#secrets.${secretName}.${cmd}"'') opNames)}
       '';
     };
   in
     base.overrideAttrs (old: {
-      passthru = (old.passthru or {}) // { inherit ops; };
+      passthru = (old.passthru or {}) // operations;
     });
 
   # All secret packages
@@ -62,8 +58,12 @@
       ${concatStringsSep "\n" (map (s: ''echo "  - ${s}"'') secretNames)}
       echo ""
       echo "Usage:"
-      echo "  nix run .#secrets.<secret>           Show secret info"
-      echo "  nix run .#secrets.<secret>.<cmd>     Run command"
+      echo "  nix run .#secrets.<name>              Show secret info"
+      echo "  nix run .#secrets.<name>.init         Create new secret"
+      echo "  nix run .#secrets.<name>.decrypt      Decrypt to stdout"
+      echo "  nix run .#secrets.<name>.edit         Edit secret"
+      echo "  nix run .#secrets.<name>.rotate       Rotate secret value"
+      echo "  nix run .#secrets.<name>.rekey        Re-encrypt with current recipients"
     '';
   };
 in
