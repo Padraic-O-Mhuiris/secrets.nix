@@ -93,9 +93,11 @@
               - ${ageKeysList}
   '';
 
-  # Import decrypt operation
+  # Import decrypt operation (uses store path for distribution)
   decryptPkg = import ./decrypt.nix {
-    inherit lib name sopsConfig secretExistsContext;
+    inherit lib name sopsConfig;
+    storePath = config._storePath;
+    existsInStore = config._existsInStore;
   };
 
   encryptPkg = pkgs:

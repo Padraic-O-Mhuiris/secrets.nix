@@ -1,5 +1,8 @@
 # Decrypt operation with builder methods
 #
+# Uses the nix store path for the encrypted file, making this distributable
+# and runnable from anywhere (not dependent on git repo location).
+#
 # Builder methods:
 #   .withSopsAgeKeyCmd "command"           - string command for SOPS_AGE_KEY_CMD
 #   .withSopsAgeKeyCmdPkg drv              - derivation for SOPS_AGE_KEY_CMD
@@ -8,8 +11,9 @@
 {
   lib,
   name,
+  storePath,
+  existsInStore,
   sopsConfig,
-  secretExistsContext,
 }: let
   # Key command can be: null | { type = "string"; value = "cmd"; } | { type = "pkg"; value = drv; } | { type = "build"; value = pkgs -> drv; }
   mkDecrypt = {
@@ -44,19 +48,21 @@
       ''
       else "";
   in
-    pkgs.writeShellApplication {
-      name = "secret-decrypt-${name}";
-      runtimeInputs = [pkgs.sops] ++ (lib.optional (keyCmdPkg != null) keyCmdPkg);
-      text = ''
-        ${secretExistsContext pkgs}
+    if !existsInStore
+    then
+      throw "Secret '${name}' does not exist at ${toString storePath}. Create it with the encrypt operation first."
+    else
+      pkgs.writeShellApplication {
+        name = "secret-decrypt-${name}";
+        runtimeInputs = [pkgs.sops] ++ (lib.optional (keyCmdPkg != null) keyCmdPkg);
+        text = ''
+          ${keySetup}
 
-        ${keySetup}
-
-        sops --config <(cat <<'SOPS_CONFIG'
-        ${sopsConfig}SOPS_CONFIG
-        ) -d --input-type binary --output-type binary "$SECRET_PATH"
-      '';
-    };
+          sops --config <(cat <<'SOPS_CONFIG'
+          ${sopsConfig}SOPS_CONFIG
+          ) -d --input-type binary --output-type binary "${storePath}"
+        '';
+      };
 
   # Create a derivation with builder methods in passthru
   mkBuilderPkg = currentOpts: pkgs: let
