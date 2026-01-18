@@ -37,7 +37,7 @@
         default = pkgs:
           pkgs.writeShellApplication {
             name = "secret-root";
-            runtimeInputs = [pkgs.git];
+            runtimeInputs = [pkgs.gitMinimal];
             text = ''
               git rev-parse --show-toplevel
             '';
