@@ -98,7 +98,16 @@
     inherit lib name sopsConfig;
     storePath = config._storePath;
     existsInStore = config._existsInStore;
+    format = config.format;
   };
+
+  # Map short format names to sops format names
+  sopsFormat = {
+    bin = "binary";
+    json = "json";
+    yaml = "yaml";
+    env = "dotenv";
+  }.${config.format};
 
   encryptPkg = pkgs:
     pkgs.writeShellApplication {
@@ -116,7 +125,7 @@
 
         if [[ -n "''${1:-}" ]]; then
           # Content provided as argument - encrypt directly
-          if echo -n "$1" | sops --config <(echo "$SOPS_CONFIG") -e --input-type binary --output-type binary /dev/stdin > "$SECRET_PATH"; then
+          if echo -n "$1" | sops --config <(echo "$SOPS_CONFIG") --input-type ${sopsFormat} --output-type ${sopsFormat} -e /dev/stdin > "$SECRET_PATH"; then
             echo "Secret created at $SECRET_PATH"
           else
             [[ -f "$SECRET_PATH" ]] && rm -f "$SECRET_PATH"
@@ -125,7 +134,7 @@
           fi
         else
           # No argument - open editor
-          if sops --config <(echo "$SOPS_CONFIG") "$SECRET_PATH"; then
+          if sops --config <(echo "$SOPS_CONFIG") --input-type ${sopsFormat} --output-type ${sopsFormat} "$SECRET_PATH"; then
             echo "Secret created at $SECRET_PATH"
           else
             [[ -f "$SECRET_PATH" ]] && rm -f "$SECRET_PATH"
