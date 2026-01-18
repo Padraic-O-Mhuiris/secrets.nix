@@ -83,6 +83,12 @@
         description = "Directory for secret file (relative to project root)";
       };
 
+      format = mkOption {
+        type = types.enum ["bin" "json" "yaml" "env"];
+        default = "bin";
+        description = "Secret file format (used by sops for encryption/decryption)";
+      };
+
       _fileName = mkOption {
         type = types.str;
         internal = true;

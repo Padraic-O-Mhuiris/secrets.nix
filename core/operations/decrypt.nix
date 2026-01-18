@@ -13,6 +13,7 @@
   name,
   storePath,
   existsInStore,
+  format,
   sopsConfig,
 }: let
   # Key command can be: null | { type = "string"; value = "cmd"; } | { type = "pkg"; value = drv; } | { type = "build"; value = pkgs -> drv; }
@@ -52,17 +53,46 @@
     then
       throw "Secret '${name}' does not exist at ${toString storePath}. Create it with the encrypt operation first."
     else
-      pkgs.writeShellApplication {
-        name = "secret-decrypt-${name}";
-        runtimeInputs = [pkgs.sops] ++ (lib.optional (keyCmdPkg != null) keyCmdPkg);
-        text = ''
-          ${keySetup}
+      let
+        # Map short format names to sops format names
+        sopsFormat = {
+          bin = "binary";
+          json = "json";
+          yaml = "yaml";
+          env = "dotenv";
+        }.${format};
 
-          sops --config <(cat <<'SOPS_CONFIG'
-          ${sopsConfig}SOPS_CONFIG
-          ) -d --input-type binary --output-type binary "${storePath}"
-        '';
-      };
+        # Format-specific runtime inputs and output processing
+        formatConfig = {
+          bin = {
+            runtimeInputs = [];
+            pipe = "";
+          };
+          json = {
+            runtimeInputs = [pkgs.jq];
+            pipe = " | jq";
+          };
+          yaml = {
+            runtimeInputs = [pkgs.yq-go];
+            pipe = " | yq";
+          };
+          env = {
+            runtimeInputs = [];
+            pipe = "";
+          };
+        }.${format};
+      in
+        pkgs.writeShellApplication {
+          name = "secret-decrypt-${name}";
+          runtimeInputs = [pkgs.sops] ++ formatConfig.runtimeInputs ++ (lib.optional (keyCmdPkg != null) keyCmdPkg);
+          text = ''
+            ${keySetup}
+
+            sops --config <(cat <<'SOPS_CONFIG'
+            ${sopsConfig}SOPS_CONFIG
+            ) --input-type ${sopsFormat} --output-type ${sopsFormat} -d "${storePath}"${formatConfig.pipe}
+          '';
+        };
 
   # Create a derivation with builder methods in passthru
   mkBuilderPkg = currentOpts: pkgs: let
