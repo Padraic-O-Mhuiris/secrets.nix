@@ -113,9 +113,60 @@
         OUTPUT_ARG=""
         INPUT_FILE=""
 
+        show_help() {
+          cat <<'HELP'
+secret-init-${name} - Create a new encrypted secret
+
+USAGE
+    secret-init-${name} [OPTIONS]
+
+DESCRIPTION
+    Creates a new SOPS-encrypted secret file for '${name}'.
+
+    Without --input, opens $EDITOR to compose the secret interactively.
+    The secret is encrypted using age keys defined in the flake configuration.
+
+OPTIONS
+    --input <path>    Read plaintext content from file or process substitution.
+                      Supports /dev/fd paths for secure secret passing.
+
+    --output <path>   Override output location. Can be a directory (appends
+                      expected filename) or full file path (must match expected
+                      filename: ${fileName}).
+                      Default: ${projectOutPath}
+
+    -h, --help        Show this help message.
+
+EXAMPLES
+    # Interactive: open $EDITOR to enter secret
+    secret-init-${name}
+
+    # From file
+    secret-init-${name} --input ./plaintext-secret.txt
+
+    # Secure: use process substitution (content never in shell history/ps)
+    secret-init-${name} --input <(cat ./plaintext-secret.txt)
+    secret-init-${name} --input <(pass show my-secret)
+    secret-init-${name} --input <(vault kv get -field=value secret/foo)
+
+    # Override output directory
+    secret-init-${name} --output ./secrets/
+
+NOTES
+    - The output directory must already exist
+    - Fails if the secret file already exists (use edit/rotate instead)
+    - Format: ${sopsFormat}
+    - Recipients: ${builtins.concatStringsSep ", " (builtins.attrNames config.recipients)}
+HELP
+        }
+
         # Parse arguments
         while [[ $# -gt 0 ]]; do
           case "$1" in
+            -h|--help)
+              show_help
+              exit 0
+              ;;
             --output)
               OUTPUT_ARG="$2"
               shift 2
@@ -134,6 +185,7 @@
               ;;
             *)
               echo "Error: Unknown argument: $1" >&2
+              echo "Run with --help for usage information." >&2
               exit 1
               ;;
           esac
