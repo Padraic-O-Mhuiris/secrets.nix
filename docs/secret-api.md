@@ -128,19 +128,40 @@ Use case: Recipients have changed in the nix configuration, and you need to upda
 Creates a new encrypted secret. Does not require decryption. Only available when the secret file doesn't exist yet.
 
 ```bash
-# From stdin
-echo '{"key": "value"}' | nix run .#secrets.my-secret.init
+# Preview encrypted output (no file created)
+nix run .#secrets.my-secret.init -- '{"key": "value"}'
+
+# Write to file
+nix run .#secrets.my-secret.init -- --outpath ./secrets/ '{"key": "value"}'
+
+# Opens $EDITOR if run directly with TTY (not via nix run)
+./result/bin/secret-init-my-secret
+./result/bin/secret-init-my-secret --outpath ./secrets/
+
+# Can also specify full path (filename must match)
+nix run .#secrets.my-secret.init -- --outpath ./secrets/my-secret.json '{"key": "value"}'
 ```
 
-- **Input**: Plaintext content (stdin)
-- **Output**: Encrypted file at `./<_fileName>`
+- **Input**: Content as positional argument, or opens `$EDITOR` (via sops) if run with TTY
+- **Output**: Stdout by default, or file at `<outpath>/<_fileName>` if `--outpath` specified
 - **Requires**: Only public keys (recipients)
 
-After running `init`, move the file to the correct location and commit:
+Options:
+- `--outpath` - Output directory or file path. If not specified, outputs to stdout.
+
+The `--outpath` argument can be:
+- A directory (e.g., `./secrets/`) - filename is derived automatically
+- A full path (e.g., `./secrets/my-secret.json`) - filename must match `_fileName`
+
+Note: `$EDITOR` mode requires a TTY, so it only works when running the command directly (not via `nix run`). Build and run directly for editor support:
 
 ```bash
-echo '{"key": "value"}' | nix run .#secrets.my-secret.init
-mv my-secret.json secrets/
+nix build .#secrets.my-secret.init && ./result/bin/secret-init-my-secret --outpath ./secrets/
+```
+
+```bash
+# Create and commit a new secret
+nix run .#secrets.my-secret.init -- --outpath ./secrets/ '{"key": "value"}'
 git add secrets/my-secret.json
 git commit -m "add my-secret"
 ```
@@ -312,8 +333,11 @@ The encrypted file in the nix store is safe:
 
 ```bash
 # Create a new secret (only available when secret doesn't exist)
-echo '{"api_key": "secret123"}' | nix run .#secrets.api-key.init
-mv api-key.json secrets/
+nix run .#secrets.api-key.init -- --outpath ./secrets/ '{"api_key": "secret123"}'
+git add secrets/api-key.json
+
+# Or use editor for content
+nix run .#secrets.api-key.init -- --outpath ./secrets/
 git add secrets/api-key.json
 
 # Edit an existing secret

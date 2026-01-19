@@ -97,7 +97,8 @@
   # ============================================================================
   # INIT OPERATION
   # Creates a new encrypted secret. Does not require decryption.
-  # Outputs to current directory with filename only.
+  # Requires --outpath flag for output location.
+  # Content from stdin, positional arg, or $EDITOR (via sops) if neither.
   # ============================================================================
   mkInit = pkgs:
     pkgs.writeShellApplication {
@@ -106,32 +107,124 @@
       text = ''
         ${sopsConfigSetup}
 
-        OUTPUT_PATH="./${fileName}"
+        EXPECTED_FILENAME="${fileName}"
+        OUTPUT_ARG=""
+        CONTENT=""
+        USE_EDITOR=false
 
-        # Check if file already exists
-        if [[ -f "$OUTPUT_PATH" ]]; then
-          echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
-          exit 1
+        # Parse arguments
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --outpath|--outPath)
+              OUTPUT_ARG="$2"
+              shift 2
+              ;;
+            --outpath=*|--outPath=*)
+              OUTPUT_ARG="''${1#*=}"
+              shift
+              ;;
+            *)
+              # Positional argument is content
+              CONTENT="$1"
+              shift
+              ;;
+          esac
+        done
+
+        # Determine output path (empty means stdout)
+        OUTPUT_PATH=""
+        if [[ -n "$OUTPUT_ARG" ]]; then
+          # Determine if output arg is a directory or file path
+          if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
+            # It's a directory (exists or ends with /)
+            OUTPUT_PATH="''${OUTPUT_ARG%/}/$EXPECTED_FILENAME"
+          else
+            # It's a file path - validate the filename matches
+            GIVEN_FILENAME=$(basename "$OUTPUT_ARG")
+            if [[ "$GIVEN_FILENAME" != "$EXPECTED_FILENAME" ]]; then
+              echo "Error: Filename mismatch." >&2
+              echo "  Expected: $EXPECTED_FILENAME" >&2
+              echo "  Given:    $GIVEN_FILENAME" >&2
+              echo "Hint: Use a directory path instead: $(dirname "$OUTPUT_ARG")/" >&2
+              exit 1
+            fi
+            OUTPUT_PATH="$OUTPUT_ARG"
+          fi
+
+          # Check if file already exists
+          if [[ -f "$OUTPUT_PATH" ]]; then
+            echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
+            exit 1
+          fi
+
+          # Ensure parent directory exists
+          mkdir -p "$(dirname "$OUTPUT_PATH")"
         fi
 
-        # Read content from stdin
-        if [[ -t 0 ]]; then
-          echo "Error: No content provided. Pipe content to stdin." >&2
-          echo "Usage: echo 'content' | nix run .#secrets.${name}.init" >&2
-          exit 1
+        # Determine content source: argument > stdin > editor
+        if [[ -n "$CONTENT" ]]; then
+          # Content already set from positional argument
+          :
+        elif [[ -t 0 ]]; then
+          # Stdin is a TTY - use editor
+          USE_EDITOR=true
+        else
+          # Stdin is not a TTY - try to read from it
+          CONTENT=$(cat)
+          if [[ -z "$CONTENT" ]]; then
+            # No content from stdin either - show usage
+            echo "Error: No content provided." >&2
+            echo "Usage: nix run .#secrets.${name}.init -- [content]" >&2
+            echo "       nix run .#secrets.${name}.init -- --outpath ./secrets/ [content]" >&2
+            echo "       echo 'content' | nix run .#secrets.${name}.init -- --outpath ./secrets/" >&2
+            echo "Run directly (not via nix run) to use \$EDITOR" >&2
+            exit 1
+          fi
         fi
-
-        CONTENT=$(cat)
 
         # Encrypt and write
-        if echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
-             --input-type ${sopsFormat} --output-type ${sopsFormat} \
-             -e /dev/stdin > "$OUTPUT_PATH"; then
-          echo "Created: $OUTPUT_PATH" >&2
+        if [[ "$USE_EDITOR" == "true" ]]; then
+          if [[ -z "$OUTPUT_PATH" ]]; then
+            # No outpath with editor - create temp, let sops edit, then cat and remove
+            TEMP_FILE=$(mktemp)
+            trap 'rm -f "$TEMP_FILE"' EXIT
+
+            if sops --config <(echo "$SOPS_CONFIG") \
+                 --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                 "$TEMP_FILE"; then
+              cat "$TEMP_FILE"
+            else
+              echo "Error: Failed to create secret" >&2
+              exit 1
+            fi
+          else
+            # With outpath - let sops handle everything securely
+            if sops --config <(echo "$SOPS_CONFIG") \
+                 --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                 "$OUTPUT_PATH"; then
+              echo "Created: $OUTPUT_PATH" >&2
+            else
+              [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+              echo "Error: Failed to create secret" >&2
+              exit 1
+            fi
+          fi
+        elif [[ -z "$OUTPUT_PATH" ]]; then
+          # No outpath - output to stdout
+          echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
+               --input-type ${sopsFormat} --output-type ${sopsFormat} \
+               -e /dev/stdin
         else
-          [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-          echo "Error: Failed to encrypt secret" >&2
-          exit 1
+          # Write to file
+          if echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
+               --input-type ${sopsFormat} --output-type ${sopsFormat} \
+               -e /dev/stdin > "$OUTPUT_PATH"; then
+            echo "Created: $OUTPUT_PATH" >&2
+          else
+            [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+            echo "Error: Failed to encrypt secret" >&2
+            exit 1
+          fi
         fi
       '';
     };
