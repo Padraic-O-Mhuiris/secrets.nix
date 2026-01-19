@@ -130,9 +130,10 @@ OPTIONS
     --input <path>    Read plaintext content from file or process substitution.
                       Supports /dev/fd paths for secure secret passing.
 
-    --output <path>   Override output location. Can be a directory (appends
-                      expected filename) or full file path (must match expected
-                      filename: ${fileName}).
+    --output <path>   Override output location. Can be:
+                      - A directory (appends expected filename)
+                      - A full file path (must match filename: ${fileName})
+                      - /dev/stdout to print encrypted output to screen
                       Default: ${projectOutPath}
 
     -h, --help        Show this help message.
@@ -151,6 +152,9 @@ EXAMPLES
 
     # Override output directory
     secret-init-${name} --output ./secrets/
+
+    # Print encrypted output to screen (for inspection/piping)
+    secret-init-${name} --input ./secret.txt --output /dev/stdout
 
 NOTES
     - The output directory must already exist
@@ -192,7 +196,9 @@ HELP
         done
 
         # Determine output path (default to project path)
-        if [[ -n "$OUTPUT_ARG" ]]; then
+        if [[ "$OUTPUT_ARG" == "/dev/stdout" ]]; then
+          OUTPUT_PATH="/dev/stdout"
+        elif [[ -n "$OUTPUT_ARG" ]]; then
           # Determine if output arg is a directory or file path
           if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
             # It's a directory (exists or ends with /)
@@ -214,17 +220,20 @@ HELP
           OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
         fi
 
-        # Check if file already exists
-        if [[ -f "$OUTPUT_PATH" ]]; then
-          echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
-          exit 1
-        fi
+        # Validation for file output (skip for stdout)
+        if [[ "$OUTPUT_PATH" != "/dev/stdout" ]]; then
+          # Check if file already exists
+          if [[ -f "$OUTPUT_PATH" ]]; then
+            echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
+            exit 1
+          fi
 
-        # Check parent directory exists
-        OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
-        if [[ ! -d "$OUTPUT_DIR" ]]; then
-          echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
-          exit 1
+          # Check parent directory exists
+          OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+          if [[ ! -d "$OUTPUT_DIR" ]]; then
+            echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
+            exit 1
+          fi
         fi
 
         # Encrypt and write
@@ -233,9 +242,9 @@ HELP
           if sops --config <(echo "$SOPS_CONFIG") \
                --input-type ${sopsFormat} --output-type ${sopsFormat} \
                -e "$INPUT_FILE" > "$OUTPUT_PATH"; then
-            echo "Created: $OUTPUT_PATH" >&2
+            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
           else
-            [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
             echo "Error: Failed to encrypt secret" >&2
             exit 1
           fi
@@ -244,9 +253,9 @@ HELP
           if sops --config <(echo "$SOPS_CONFIG") \
                --input-type ${sopsFormat} --output-type ${sopsFormat} \
                "$OUTPUT_PATH"; then
-            echo "Created: $OUTPUT_PATH" >&2
+            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
           else
-            [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
             echo "Error: Failed to create secret" >&2
             exit 1
           fi
