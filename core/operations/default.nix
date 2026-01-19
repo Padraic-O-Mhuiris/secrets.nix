@@ -22,6 +22,7 @@
   # Use derived properties from config
   fileName = config._fileName;
   storePath = toString config._path;
+  projectOutPath = config._projectOutPath;
 
   # Map short format names to sops format names
   sopsFormat = {
@@ -108,31 +109,37 @@
         ${sopsConfigSetup}
 
         EXPECTED_FILENAME="${fileName}"
+        DEFAULT_OUTPUT_PATH="${projectOutPath}"
         OUTPUT_ARG=""
-        CONTENT=""
-        USE_EDITOR=false
+        INPUT_FILE=""
 
         # Parse arguments
         while [[ $# -gt 0 ]]; do
           case "$1" in
-            --outpath|--outPath)
+            --output)
               OUTPUT_ARG="$2"
               shift 2
               ;;
-            --outpath=*|--outPath=*)
+            --output=*)
               OUTPUT_ARG="''${1#*=}"
               shift
               ;;
-            *)
-              # Positional argument is content
-              CONTENT="$1"
+            --input)
+              INPUT_FILE="$2"
+              shift 2
+              ;;
+            --input=*)
+              INPUT_FILE="''${1#*=}"
               shift
+              ;;
+            *)
+              echo "Error: Unknown argument: $1" >&2
+              exit 1
               ;;
           esac
         done
 
-        # Determine output path (empty means stdout)
-        OUTPUT_PATH=""
+        # Determine output path (default to project path)
         if [[ -n "$OUTPUT_ARG" ]]; then
           # Determine if output arg is a directory or file path
           if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
@@ -145,84 +152,50 @@
               echo "Error: Filename mismatch." >&2
               echo "  Expected: $EXPECTED_FILENAME" >&2
               echo "  Given:    $GIVEN_FILENAME" >&2
-              echo "Hint: Use a directory path instead: $(dirname "$OUTPUT_ARG")/" >&2
+              echo "Hint: Use a directory path instead: --output $(dirname "$OUTPUT_ARG")/" >&2
               exit 1
             fi
             OUTPUT_PATH="$OUTPUT_ARG"
           fi
-
-          # Check if file already exists
-          if [[ -f "$OUTPUT_PATH" ]]; then
-            echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
-            exit 1
-          fi
-
-          # Ensure parent directory exists
-          mkdir -p "$(dirname "$OUTPUT_PATH")"
+        else
+          # Default to project output path
+          OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
         fi
 
-        # Determine content source: argument > stdin > editor
-        if [[ -n "$CONTENT" ]]; then
-          # Content already set from positional argument
-          :
-        elif [[ -t 0 ]]; then
-          # Stdin is a TTY - use editor
-          USE_EDITOR=true
-        else
-          # Stdin is not a TTY - try to read from it
-          CONTENT=$(cat)
-          if [[ -z "$CONTENT" ]]; then
-            # No content from stdin either - show usage
-            echo "Error: No content provided." >&2
-            echo "Usage: nix run .#secrets.${name}.init -- [content]" >&2
-            echo "       nix run .#secrets.${name}.init -- --outpath ./secrets/ [content]" >&2
-            echo "       echo 'content' | nix run .#secrets.${name}.init -- --outpath ./secrets/" >&2
-            echo "Run directly (not via nix run) to use \$EDITOR" >&2
-            exit 1
-          fi
+        # Check if file already exists
+        if [[ -f "$OUTPUT_PATH" ]]; then
+          echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
+          exit 1
+        fi
+
+        # Check parent directory exists
+        OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+        if [[ ! -d "$OUTPUT_DIR" ]]; then
+          echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
+          exit 1
         fi
 
         # Encrypt and write
-        if [[ "$USE_EDITOR" == "true" ]]; then
-          if [[ -z "$OUTPUT_PATH" ]]; then
-            # No outpath with editor - create temp, let sops edit, then cat and remove
-            TEMP_FILE=$(mktemp)
-            trap 'rm -f "$TEMP_FILE"' EXIT
-
-            if sops --config <(echo "$SOPS_CONFIG") \
-                 --input-type ${sopsFormat} --output-type ${sopsFormat} \
-                 "$TEMP_FILE"; then
-              cat "$TEMP_FILE"
-            else
-              echo "Error: Failed to create secret" >&2
-              exit 1
-            fi
-          else
-            # With outpath - let sops handle everything securely
-            if sops --config <(echo "$SOPS_CONFIG") \
-                 --input-type ${sopsFormat} --output-type ${sopsFormat} \
-                 "$OUTPUT_PATH"; then
-              echo "Created: $OUTPUT_PATH" >&2
-            else
-              [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-              echo "Error: Failed to create secret" >&2
-              exit 1
-            fi
-          fi
-        elif [[ -z "$OUTPUT_PATH" ]]; then
-          # No outpath - output to stdout
-          echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
+        if [[ -n "$INPUT_FILE" ]]; then
+          # Read content from file (supports process substitution)
+          if sops --config <(echo "$SOPS_CONFIG") \
                --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -e /dev/stdin
-        else
-          # Write to file
-          if echo -n "$CONTENT" | sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -e /dev/stdin > "$OUTPUT_PATH"; then
+               -e "$INPUT_FILE" > "$OUTPUT_PATH"; then
             echo "Created: $OUTPUT_PATH" >&2
           else
             [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
             echo "Error: Failed to encrypt secret" >&2
+            exit 1
+          fi
+        else
+          # Use editor
+          if sops --config <(echo "$SOPS_CONFIG") \
+               --input-type ${sopsFormat} --output-type ${sopsFormat} \
+               "$OUTPUT_PATH"; then
+            echo "Created: $OUTPUT_PATH" >&2
+          else
+            [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+            echo "Error: Failed to create secret" >&2
             exit 1
           fi
         fi
@@ -339,9 +312,8 @@
           fi
         else
           echo "Error: No content provided." >&2
-          echo "Usage: echo 'content' | nix run .#secrets.${name}.rotate" >&2
-          echo "       nix run .#secrets.${name}.rotate 'content'" >&2
-          echo "       nix run .#secrets.${name}.rotate ./file.json" >&2
+          echo "Usage: secret-rotate-${name} 'content'" >&2
+          echo "       secret-rotate-${name} ./file.json" >&2
           exit 1
         fi
 
