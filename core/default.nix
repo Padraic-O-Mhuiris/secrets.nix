@@ -69,6 +69,17 @@
         description = "Derived full path: <dir>/<_fileName>";
       };
 
+      _projectOutPath = mkOption {
+        type = types.str;
+        readOnly = true;
+        default = let
+          fullPath = builtins.toString config._path;
+          parts = lib.splitString "/" fullPath;
+          relativeParts = lib.drop 4 parts;
+        in "./" + lib.concatStringsSep "/" relativeParts;
+        description = "Relative path from flake root";
+      };
+
       _exists = mkOption {
         type = types.bool;
         readOnly = true;
