@@ -103,7 +103,7 @@
   # ============================================================================
   mkInit = pkgs:
     pkgs.writeShellApplication {
-      name = "secret-init-${name}";
+      name = "init-${name}";
       runtimeInputs = [pkgs.sops];
       text = ''
         ${sopsConfigSetup}
@@ -115,10 +115,10 @@
 
         show_help() {
           cat <<'HELP'
-secret-init-${name} - Create a new encrypted secret
+init-${name} - Create a new encrypted secret
 
 USAGE
-    secret-init-${name} [OPTIONS]
+    init-${name} [OPTIONS]
 
 DESCRIPTION
     Creates a new SOPS-encrypted secret file for '${name}'.
@@ -140,21 +140,21 @@ OPTIONS
 
 EXAMPLES
     # Interactive: open $EDITOR to enter secret
-    secret-init-${name}
+    init-${name}
 
     # From file
-    secret-init-${name} --input ./plaintext-secret.txt
+    init-${name} --input ./plaintext-secret.txt
 
     # Secure: use process substitution (content never in shell history/ps)
-    secret-init-${name} --input <(cat ./plaintext-secret.txt)
-    secret-init-${name} --input <(pass show my-secret)
-    secret-init-${name} --input <(vault kv get -field=value secret/foo)
+    init-${name} --input <(cat ./plaintext-secret.txt)
+    init-${name} --input <(pass show my-secret)
+    init-${name} --input <(vault kv get -field=value secret/foo)
 
     # Override output directory
-    secret-init-${name} --output ./secrets/
+    init-${name} --output ./secrets/
 
     # Print encrypted output to screen (for inspection/piping)
-    secret-init-${name} --input ./secret.txt --output /dev/stdout
+    init-${name} --input ./secret.txt --output /dev/stdout
 
 NOTES
     - The output directory must already exist
@@ -272,7 +272,7 @@ HELP
     fmtCfg = formatConfig pkgs;
   in
     pkgs.writeShellApplication {
-      name = "secret-decrypt-${name}";
+      name = "decrypt-${name}";
       runtimeInputs = [pkgs.sops] ++ fmtCfg.runtimeInputs ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
         ${keySetupCode resolved.cmd}
@@ -298,7 +298,7 @@ HELP
     resolved = resolveKeyCmd pkgs keyCmd;
   in
     pkgs.writeShellApplication {
-      name = "secret-edit-${name}";
+      name = "edit-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
         ${keySetupCode resolved.cmd}
@@ -343,7 +343,7 @@ HELP
     resolved = resolveKeyCmd pkgs keyCmd;
   in
     pkgs.writeShellApplication {
-      name = "secret-rotate-${name}";
+      name = "rotate-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
         ${keySetupCode resolved.cmd}
@@ -399,7 +399,7 @@ HELP
     resolved = resolveKeyCmd pkgs keyCmd;
   in
     pkgs.writeShellApplication {
-      name = "secret-rekey-${name}";
+      name = "rekey-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
         ${keySetupCode resolved.cmd}
