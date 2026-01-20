@@ -314,6 +314,55 @@ your-project/
     └── service-account.json  # Encrypted secret (json format)
 ```
 
+## DevShell Integration
+
+Include secret management tools in your development shell:
+
+```nix
+{
+  devShells.default = pkgs.mkShell {
+    packages = [
+      pkgs.sops
+      pkgs.age
+
+      # Include specific decrypt commands
+      secretsPkgs.api-key.decrypt.recipient.alice
+      secretsPkgs.db-password.decrypt.recipient.alice
+
+      # Or create a wrapper with all operations for a recipient
+      (pkgs.symlinkJoin {
+        name = "secrets-alice";
+        paths = [
+          secretsPkgs.api-key.decrypt.recipient.alice
+          secretsPkgs.api-key.edit.recipient.alice
+          secretsPkgs.api-key.rotate.recipient.alice
+          secretsPkgs.db-password.decrypt.recipient.alice
+        ];
+      })
+    ];
+
+    # Or configure via environment
+    shellHook = ''
+      export SOPS_AGE_KEY_CMD="pass show age/alice"
+    '';
+  };
+}
+```
+
+Then in your shell:
+
+```bash
+# Decrypt directly
+decrypt-api-key
+
+# Use in scripts
+API_KEY=$(decrypt-api-key)
+curl -H "Authorization: Bearer $API_KEY" https://api.example.com
+
+# Edit a secret
+edit-api-key
+```
+
 ## Future Work
 
 - Additional SOPS key types:
