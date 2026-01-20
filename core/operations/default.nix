@@ -589,7 +589,24 @@ HELP
     });
 
   # Entry points for operations that need the builder pattern
-  decryptPkg = pkgs: mkBuilderPkg mkDecrypt {keyCmd = null;} pkgs;
+  decryptPkg = pkgs: let
+    basePkg = mkBuilderPkg mkDecrypt {keyCmd = null;} pkgs;
+    # Build recipient-specific decrypt packages for those with decryptPkg
+    recipientsWithDecrypt = lib.filterAttrs (_: r: r.decryptPkg != null) config.recipients;
+    recipientPkgs = lib.mapAttrs (recipientName: recipient:
+      mkBuilderPkg mkDecrypt {
+        keyCmd = {
+          type = "build";
+          value = recipient.decryptPkg;
+        };
+      } pkgs
+    ) recipientsWithDecrypt;
+  in
+    basePkg.overrideAttrs (old: {
+      passthru = (old.passthru or {}) // {
+        recipient = recipientPkgs;
+      };
+    });
   editPkg = pkgs: mkBuilderPkg mkEdit {keyCmd = null;} pkgs;
   rotatePkg = pkgs: mkBuilderPkg mkRotate {keyCmd = null;} pkgs;
   rekeyPkg = pkgs: mkBuilderPkg mkRekey {keyCmd = null;} pkgs;

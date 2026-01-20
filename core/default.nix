@@ -27,6 +27,12 @@
         readOnly = true; # Note only supporting age keys initially
         description = "Key type (sops backend)";
       };
+
+      decryptPkg = mkOption {
+        type = types.nullOr (types.functionTo types.package);
+        default = null;
+        description = "Function (pkgs -> drv) that produces the key command package for decryption";
+      };
     };
   };
 
