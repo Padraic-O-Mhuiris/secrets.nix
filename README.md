@@ -30,20 +30,14 @@ No `.sops.yaml` file needed - configuration is derived from your Nix expressions
     recipients = {
       alice = {
         key = "age1abc...";  # alice's public key
-        decryptPkg = pkgs: pkgs.writeShellScriptBin "get-alice-key" ''
-          pass show age/alice
-        '';
       };
       bob = {
         key = "age1xyz...";  # bob's public key
-        decryptPkg = pkgs: pkgs.writeShellScriptBin "get-bob-key" ''
-          cat ~/.config/sops/age/keys.txt
-        '';
       };
       server1 = {
         key = "age1srv...";  # server's public key
         decryptPkg = pkgs: pkgs.writeShellScriptBin "get-server1-key" ''
-          ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
+          ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i /etc/ssh/ssh_host_ed25519_key
         '';
       };
     };
@@ -163,32 +157,151 @@ Supported secret formats:
 | `yaml` | `.yaml`   | Structured YAML data |
 | `env`  | `.env`    | Environment files |
 
-## Builder Pattern
+## Key Configuration
 
-For Nix-level composition, use the builder pattern:
+There are multiple ways to provide the age secret key for decryption, at both build time (Nix evaluation) and runtime (shell execution).
+
+### Build-time Configuration
+
+Configure the key source when building packages in your flake:
+
+#### 1. Per-recipient packages (recommended)
+
+Define `decryptPkg` in your recipients to get `decrypt.recipient.<name>`:
+
+```nix
+recipients = {
+  alice = {
+    key = "age1...";
+    decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+      pass show age/alice
+    '';
+  };
+};
+
+# Then use:
+packages.decrypt-secret = secrets.api-key.decrypt.recipient.alice;
+```
+
+#### 2. Builder pattern
+
+Chain builder methods for one-off configurations:
 
 ```nix
 {
-  # Pre-configured decrypt package
+  # String command (executed at runtime)
   my-decrypt = secrets.api-key.decrypt.withSopsAgeKeyCmd "pass show age/key";
 
-  # Or with a package
+  # Pre-built package (must output key to stdout)
   my-decrypt = secrets.api-key.decrypt.withSopsAgeKeyCmdPkg myKeyPkg;
 
-  # Or build at evaluation time
+  # Build function (pkgs -> derivation)
   my-decrypt = secrets.api-key.decrypt.buildSopsAgeKeyCmdPkg (pkgs:
-    pkgs.writeShellScriptBin "get-key" "pass show age/key"
+    pkgs.writeShellScriptBin "get-key" ''
+      ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
+    ''
   );
 }
 ```
 
-## Environment Variables
+### Runtime Configuration
 
-The decrypt operation respects these environment variables (in order of precedence):
+Override or provide key configuration when running the command:
 
-1. `SOPS_AGE_KEY` - Direct key value
-2. `SOPS_AGE_KEY_FILE` - Path to key file
-3. `SOPS_AGE_KEY_CMD` - Command to retrieve key
+#### 1. Command-line flags
+
+```bash
+# Command that outputs the key (most secure)
+nix run .#secrets.api-key.decrypt -- --sopsAgeKeyCmd "pass show age/key"
+
+# Path to key file
+nix run .#secrets.api-key.decrypt -- --sopsAgeKeyFile ~/.config/sops/age/keys.txt
+
+# Direct key value (visible in ps - use only for testing)
+nix run .#secrets.api-key.decrypt -- --sopsAgeKey "AGE-SECRET-KEY-1..."
+```
+
+#### 2. Environment variables
+
+```bash
+# Command that outputs the key
+export SOPS_AGE_KEY_CMD="pass show age/key"
+nix run .#secrets.api-key.decrypt
+
+# Path to key file
+export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
+nix run .#secrets.api-key.decrypt
+
+# Direct key value
+export SOPS_AGE_KEY="AGE-SECRET-KEY-1..."
+nix run .#secrets.api-key.decrypt
+```
+
+#### 3. Using direnv
+
+Add to `.envrc` for automatic key configuration per-project:
+
+```bash
+# .envrc
+export SOPS_AGE_KEY_CMD="pass show age/myproject"
+```
+
+### Key Resolution Order
+
+When decrypting, keys are resolved in this order (first match wins):
+
+1. `--sopsAgeKey` flag
+2. `--sopsAgeKeyFile` flag
+3. `--sopsAgeKeyCmd` flag
+4. `SOPS_AGE_KEY` environment variable
+5. `SOPS_AGE_KEY_FILE` environment variable
+6. `SOPS_AGE_KEY_CMD` environment variable
+7. Build-time configured key (from `decryptPkg` or builder pattern)
+
+### Common Key Sources
+
+```nix
+# Password store (pass)
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  ${pkgs.pass}/bin/pass show age/mykey
+'';
+
+# 1Password CLI
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  ${pkgs._1password}/bin/op read "op://vault/age-key/secret"
+'';
+
+# SSH key via ssh-to-age
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
+'';
+
+# HashiCorp Vault
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  ${pkgs.vault}/bin/vault kv get -field=key secret/age
+'';
+
+# AWS Secrets Manager
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  ${pkgs.awscli2}/bin/aws secretsmanager get-secret-value \
+    --secret-id age-key --query SecretString --output text
+'';
+
+# Bitwarden CLI
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  ${pkgs.bitwarden-cli}/bin/bw get password age-key
+'';
+
+# macOS Keychain
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  security find-generic-password -s "age-key" -w
+'';
+
+# Plain file (least secure, but simple)
+decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
+  cat ~/.config/sops/age/keys.txt
+'';
+```
 
 ## Project Structure
 
@@ -203,8 +316,13 @@ your-project/
 
 ## Future Work
 
-- GPG key support
-- agenix integration
+- Additional SOPS key types:
+  - GPG keys
+  - AWS KMS
+  - GCP KMS
+  - Azure Key Vault
+  - HashiCorp Vault Transit
+- sopsnix/agenix integration
 - flake-parts module
 
 ## Links
