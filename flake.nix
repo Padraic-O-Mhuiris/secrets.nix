@@ -60,7 +60,19 @@
           packages = [pkgs.alejandra pkgs.sops pkgs.age];
         };
 
-        packages.secrets = mkSecretsPackages example pkgs;
+        packages = let
+          secrets = mkSecretsPackages example pkgs;
+          decryptPkg =
+            pkgs.writeShellScriptBin "sops-age-key-cmd"
+            # bash
+            ''
+              echo "AGE-SECRET-KEY-1EKATW8QJD4NF4XCX7XME5VDJ8MVER7LM4FHCWF6UFXSRJTLTKGCSYEZW68"
+            '';
+        in {
+          inherit secrets;
+
+          decrypt-api-key = secrets.api-key.decrypt.withSopsAgeKeyCmdPkg decryptPkg;
+        };
       };
 
       flake = {
