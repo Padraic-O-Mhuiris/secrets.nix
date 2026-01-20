@@ -42,7 +42,9 @@ No `.sops.yaml` file needed - configuration is derived from your Nix expressions
       };
       server1 = {
         key = "age1srv...";  # server's public key
-        # no decryptPkg - this is a deploy target, not a developer
+        decryptPkg = pkgs: pkgs.writeShellScriptBin "get-server1-key" ''
+          ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
+        '';
       };
     };
 

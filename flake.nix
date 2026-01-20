@@ -35,7 +35,7 @@
         key = "age1jmxpfw8y5e5njm5fq08n65ceu7vuydx5l8wxk7hyu9s3x5qs93ysxqrd8l";
         decryptPkg = pkgs:
           pkgs.writeShellScriptBin "get-server1-key" ''
-            echo "AGE-SECRET-KEY-1NEF2YXJC4K7L82VNGJGT5JPHQX0UQ8VWFJQF09W6S3U4ZC9RE3KQYAAP6L"
+            ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
           '';
       };
     };
