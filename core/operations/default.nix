@@ -24,6 +24,12 @@
   storePath = toString config._path;
   projectOutPath = config._projectOutPath;
 
+  # Normalize name to env var format: api-key -> API_KEY
+  toEnvVar = s: lib.toUpper (builtins.replaceStrings ["-"] ["_"] s);
+  secretEnvName = toEnvVar name;
+  recipientEnvNames = lib.mapAttrs (rName: _: toEnvVar rName) config.recipients;
+  recipientNamesList = builtins.attrNames config.recipients;
+
   # Map short format names to sops format names
   sopsFormat = {
     bin = "binary";
@@ -82,11 +88,140 @@
     }
     else {cmd = null; pkg = null;};
 
-  # Generate key setup bash code
+  # Generate key setup bash code (for edit/rotate/rekey that use builtin cmd)
   keySetupCode = resolvedCmd:
     if resolvedCmd != null
     then ''export SOPS_AGE_KEY_CMD="${resolvedCmd}"''
     else "";
+
+  # Generate full key resolution code for edit/rotate/rekey operations
+  # Includes recipient env var resolution + builtin fallback
+  keyResolutionCode = builtinKeyCmd: ''
+    ${recipientEnvVarResolution}
+
+    # Key resolution: check recipient env vars first, then builtin
+    if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
+      if ! resolve_recipient_key; then
+        ${if builtinKeyCmd != null then ''export SOPS_AGE_KEY_CMD="${builtinKeyCmd}"'' else ":  # No builtin key command configured"}
+      fi
+    fi
+  '';
+
+  # Generate bash code for recipient-based env var resolution
+  # Checks: <SECRET>__<RECIPIENT>__AGE_KEY* then <RECIPIENT>__AGE_KEY* for each recipient
+  recipientEnvVarResolution = let
+    recipientEnvList = lib.mapAttrsToList (rName: envName: {name = rName; env = envName;}) recipientEnvNames;
+  in ''
+    # Recipient-based env var resolution
+    # Priority: secret-specific > recipient-level > global SOPS_AGE_* > builtin
+    resolve_recipient_key() {
+      local found_recipient=""
+      local found_key_type=""
+      local found_key_value=""
+      local conflict_recipients=""
+
+      # First pass: check for secret-specific env vars (<SECRET>__<RECIPIENT>__AGE_KEY*)
+      ${lib.concatMapStringsSep "\n      " (r: ''
+      if [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY:-}" ]]; then
+        if [[ -n "$found_recipient" ]]; then
+          conflict_recipients="$conflict_recipients ${r.name}"
+        else
+          found_recipient="${r.name}"
+          found_key_type="key"
+          found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY}"
+        fi
+      elif [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY_FILE:-}" ]]; then
+        if [[ -n "$found_recipient" ]]; then
+          conflict_recipients="$conflict_recipients ${r.name}"
+        else
+          found_recipient="${r.name}"
+          found_key_type="file"
+          found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY_FILE}"
+        fi
+      elif [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY_CMD:-}" ]]; then
+        if [[ -n "$found_recipient" ]]; then
+          conflict_recipients="$conflict_recipients ${r.name}"
+        else
+          found_recipient="${r.name}"
+          found_key_type="cmd"
+          found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY_CMD}"
+        fi
+      fi
+      '') recipientEnvList}
+
+      # If we found a secret-specific key, use it (no conflicts at this level - most specific wins)
+      if [[ -n "$found_recipient" ]] && [[ -z "$conflict_recipients" ]]; then
+        case "$found_key_type" in
+          key)  export SOPS_AGE_KEY="$found_key_value" ;;
+          file) export SOPS_AGE_KEY_FILE="$found_key_value" ;;
+          cmd)  export SOPS_AGE_KEY_CMD="$found_key_value" ;;
+        esac
+        return 0
+      fi
+
+      # Error if multiple secret-specific vars found
+      if [[ -n "$conflict_recipients" ]]; then
+        echo "Error: Multiple secret-specific key env vars set for recipients:$conflict_recipients $found_recipient" >&2
+        echo "Only one recipient's key should be configured at the secret-specific level." >&2
+        exit 1
+      fi
+
+      # Second pass: check for recipient-level env vars (<RECIPIENT>__AGE_KEY*)
+      found_recipient=""
+      found_key_type=""
+      found_key_value=""
+      conflict_recipients=""
+
+      ${lib.concatMapStringsSep "\n      " (r: ''
+      if [[ -n "''${${r.env}__AGE_KEY:-}" ]]; then
+        if [[ -n "$found_recipient" ]]; then
+          conflict_recipients="$conflict_recipients ${r.name}"
+        else
+          found_recipient="${r.name}"
+          found_key_type="key"
+          found_key_value="''${${r.env}__AGE_KEY}"
+        fi
+      elif [[ -n "''${${r.env}__AGE_KEY_FILE:-}" ]]; then
+        if [[ -n "$found_recipient" ]]; then
+          conflict_recipients="$conflict_recipients ${r.name}"
+        else
+          found_recipient="${r.name}"
+          found_key_type="file"
+          found_key_value="''${${r.env}__AGE_KEY_FILE}"
+        fi
+      elif [[ -n "''${${r.env}__AGE_KEY_CMD:-}" ]]; then
+        if [[ -n "$found_recipient" ]]; then
+          conflict_recipients="$conflict_recipients ${r.name}"
+        else
+          found_recipient="${r.name}"
+          found_key_type="cmd"
+          found_key_value="''${${r.env}__AGE_KEY_CMD}"
+        fi
+      fi
+      '') recipientEnvList}
+
+      # Error if multiple recipient-level vars found
+      if [[ -n "$conflict_recipients" ]]; then
+        echo "Error: Multiple recipient-level key env vars set for recipients:$conflict_recipients $found_recipient" >&2
+        echo "Use secret-specific env vars to disambiguate:" >&2
+        echo "  ${secretEnvName}__<RECIPIENT>__AGE_KEY_CMD" >&2
+        exit 1
+      fi
+
+      # If we found a recipient-level key, use it
+      if [[ -n "$found_recipient" ]]; then
+        case "$found_key_type" in
+          key)  export SOPS_AGE_KEY="$found_key_value" ;;
+          file) export SOPS_AGE_KEY_FILE="$found_key_value" ;;
+          cmd)  export SOPS_AGE_KEY_CMD="$found_key_value" ;;
+        esac
+        return 0
+      fi
+
+      # No recipient env vars found, fall through to global/builtin
+      return 1
+    }
+  '';
 
   # Shared SOPS config setup
   sopsConfigSetup = ''
@@ -272,6 +407,12 @@ HELP
     fmtCfg = formatConfig pkgs;
     # Build-time key command (from builder pattern)
     builtinKeyCmd = if resolved.cmd != null then "\"${resolved.cmd}\"" else "";
+    # Generate recipient env var examples for help text
+    recipientEnvExamples = lib.concatMapStringsSep "\n    " (rName: let
+      envName = toEnvVar rName;
+    in ''
+${secretEnvName}__${envName}__AGE_KEY_CMD   Secret-specific for ${rName}
+    ${envName}__AGE_KEY_CMD                 All secrets for ${rName}'') recipientNamesList;
   in
     assert config._exists || throw "Secret '${name}' does not exist at ${storePath}. Create it with init first.";
     pkgs.writeShellApplication {
@@ -279,6 +420,7 @@ HELP
       runtimeInputs = [pkgs.sops] ++ fmtCfg.runtimeInputs ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
         ${sopsConfigSetup}
+        ${recipientEnvVarResolution}
 
         INPUT_PATH="${storePath}"
         OUTPUT_PATH="/dev/stdout"
@@ -299,9 +441,9 @@ DESCRIPTION
       1. --sopsAgeKey (direct key value)
       2. --sopsAgeKeyFile (path to key file)
       3. --sopsAgeKeyCmd (command that outputs key)
-      4. SOPS_AGE_KEY environment variable
-      5. SOPS_AGE_KEY_FILE environment variable
-      6. SOPS_AGE_KEY_CMD environment variable
+      4. ${secretEnvName}__<RECIPIENT>__AGE_KEY[_FILE|_CMD] (secret-specific)
+      5. <RECIPIENT>__AGE_KEY[_FILE|_CMD] (recipient-level)
+      6. SOPS_AGE_KEY[_FILE|_CMD] (global)
       7. Builder-configured key command (if any)
 
 OPTIONS
@@ -336,9 +478,19 @@ EXAMPLES
     decrypt-${name} | jq .
 
 ENVIRONMENT
+    Recipient-specific env vars (for this secret's recipients):
+    ${recipientEnvExamples}
+
+    Global env vars:
     SOPS_AGE_KEY          Age secret key (direct value)
     SOPS_AGE_KEY_FILE     Path to age secret key file
     SOPS_AGE_KEY_CMD      Command to retrieve age secret key
+
+    Example .envrc.local (gitignored):
+      export BOB__AGE_KEY_CMD="pass show age/bob-key"
+
+RECIPIENTS
+    ${builtins.concatStringsSep ", " recipientNamesList}
 
 NOTES
     - Format: ${sopsFormat}
@@ -393,10 +545,15 @@ HELP
           esac
         done
 
-        # Apply builtin key command if no runtime key config provided
+        # Key resolution: CLI flags already set SOPS_AGE_* above if provided
+        # Now check recipient env vars if no CLI flags were used
         if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
-          if [[ -n "$BUILTIN_KEY_CMD" ]]; then
-            export SOPS_AGE_KEY_CMD="$BUILTIN_KEY_CMD"
+          # Try recipient-based env var resolution
+          if ! resolve_recipient_key; then
+            # No recipient env vars found, try builtin key command
+            if [[ -n "$BUILTIN_KEY_CMD" ]]; then
+              export SOPS_AGE_KEY_CMD="$BUILTIN_KEY_CMD"
+            fi
           fi
         fi
 
@@ -431,8 +588,8 @@ HELP
       name = "edit-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
-        ${keySetupCode resolved.cmd}
         ${sopsConfigSetup}
+        ${keyResolutionCode resolved.cmd}
 
         if [[ ! -f "${storePath}" ]]; then
           echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
@@ -476,8 +633,8 @@ HELP
       name = "rotate-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
-        ${keySetupCode resolved.cmd}
         ${sopsConfigSetup}
+        ${keyResolutionCode resolved.cmd}
 
         if [[ ! -f "${storePath}" ]]; then
           echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
@@ -532,8 +689,8 @@ HELP
       name = "rekey-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
-        ${keySetupCode resolved.cmd}
         ${sopsConfigSetup}
+        ${keyResolutionCode resolved.cmd}
 
         if [[ ! -f "${storePath}" ]]; then
           echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
