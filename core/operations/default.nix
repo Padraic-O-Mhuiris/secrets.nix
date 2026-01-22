@@ -31,12 +31,15 @@
   recipientNamesList = builtins.attrNames config.recipients;
 
   # Map short format names to sops format names
-  sopsFormat = {
-    bin = "binary";
-    json = "json";
-    yaml = "yaml";
-    env = "dotenv";
-  }.${config.format};
+  sopsFormat =
+    {
+      bin = "binary";
+      json = "json";
+      yaml = "yaml";
+      env = "dotenv";
+    }.${
+      config.format
+    };
 
   # Generate .sops.yaml content for this secret
   sopsConfig = let
@@ -51,42 +54,56 @@
   '';
 
   # Format-specific configuration
-  formatConfig = pkgs: {
-    bin = {
-      runtimeInputs = [];
-      pipe = "";
+  formatConfig = pkgs:
+    {
+      bin = {
+        runtimeInputs = [];
+        pipe = "";
+      };
+      json = {
+        runtimeInputs = [pkgs.jq];
+        pipe = " | jq";
+      };
+      yaml = {
+        runtimeInputs = [pkgs.yq-go];
+        pipe = " | yq";
+      };
+      env = {
+        runtimeInputs = [];
+        pipe = "";
+      };
+    }.${
+      config.format
     };
-    json = {
-      runtimeInputs = [pkgs.jq];
-      pipe = " | jq";
-    };
-    yaml = {
-      runtimeInputs = [pkgs.yq-go];
-      pipe = " | yq";
-    };
-    env = {
-      runtimeInputs = [];
-      pipe = "";
-    };
-  }.${config.format};
 
   # Resolve key command configuration to actual command string and package
   resolveKeyCmd = pkgs: keyCmd:
     if keyCmd == null
-    then {cmd = null; pkg = null;}
+    then {
+      cmd = null;
+      pkg = null;
+    }
     else if keyCmd.type == "string"
-    then {cmd = keyCmd.value; pkg = null;}
+    then {
+      cmd = keyCmd.value;
+      pkg = null;
+    }
     else if keyCmd.type == "pkg"
     then {
       cmd = "${keyCmd.value}/bin/${keyCmd.value.meta.mainProgram or keyCmd.value.pname or keyCmd.value.name}";
       pkg = keyCmd.value;
     }
     else if keyCmd.type == "build"
-    then let p = keyCmd.value pkgs; in {
+    then let
+      p = keyCmd.value pkgs;
+    in {
       cmd = "${p}/bin/${p.meta.mainProgram or p.pname or p.name}";
       pkg = p;
     }
-    else {cmd = null; pkg = null;};
+    else {
+      cmd = null;
+      pkg = null;
+    };
 
   # Generate key setup bash code (for edit/rotate/rekey that use builtin cmd)
   keySetupCode = resolvedCmd:
@@ -102,7 +119,11 @@
     # Key resolution: check recipient env vars first, then builtin
     if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
       if ! resolve_recipient_key; then
-        ${if builtinKeyCmd != null then ''export SOPS_AGE_KEY_CMD="${builtinKeyCmd}"'' else ":  # No builtin key command configured"}
+        ${
+      if builtinKeyCmd != null
+      then ''export SOPS_AGE_KEY_CMD="${builtinKeyCmd}"''
+      else ":  # No builtin key command configured"
+    }
       fi
     fi
   '';
@@ -110,7 +131,12 @@
   # Generate bash code for recipient-based env var resolution
   # Checks: <SECRET>__<RECIPIENT>__AGE_KEY* then <RECIPIENT>__AGE_KEY* for each recipient
   recipientEnvVarResolution = let
-    recipientEnvList = lib.mapAttrsToList (rName: envName: {name = rName; env = envName;}) recipientEnvNames;
+    recipientEnvList =
+      lib.mapAttrsToList (rName: envName: {
+        name = rName;
+        env = envName;
+      })
+      recipientEnvNames;
   in ''
     # Recipient-based env var resolution
     # Priority: secret-specific > recipient-level > global SOPS_AGE_* > builtin
@@ -122,32 +148,33 @@
 
       # First pass: check for secret-specific env vars (<SECRET>__<RECIPIENT>__AGE_KEY*)
       ${lib.concatMapStringsSep "\n      " (r: ''
-      if [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY:-}" ]]; then
-        if [[ -n "$found_recipient" ]]; then
-          conflict_recipients="$conflict_recipients ${r.name}"
-        else
-          found_recipient="${r.name}"
-          found_key_type="key"
-          found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY}"
+        if [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY:-}" ]]; then
+          if [[ -n "$found_recipient" ]]; then
+            conflict_recipients="$conflict_recipients ${r.name}"
+          else
+            found_recipient="${r.name}"
+            found_key_type="key"
+            found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY}"
+          fi
+        elif [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY_FILE:-}" ]]; then
+          if [[ -n "$found_recipient" ]]; then
+            conflict_recipients="$conflict_recipients ${r.name}"
+          else
+            found_recipient="${r.name}"
+            found_key_type="file"
+            found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY_FILE}"
+          fi
+        elif [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY_CMD:-}" ]]; then
+          if [[ -n "$found_recipient" ]]; then
+            conflict_recipients="$conflict_recipients ${r.name}"
+          else
+            found_recipient="${r.name}"
+            found_key_type="cmd"
+            found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY_CMD}"
+          fi
         fi
-      elif [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY_FILE:-}" ]]; then
-        if [[ -n "$found_recipient" ]]; then
-          conflict_recipients="$conflict_recipients ${r.name}"
-        else
-          found_recipient="${r.name}"
-          found_key_type="file"
-          found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY_FILE}"
-        fi
-      elif [[ -n "''${${secretEnvName}__${r.env}__AGE_KEY_CMD:-}" ]]; then
-        if [[ -n "$found_recipient" ]]; then
-          conflict_recipients="$conflict_recipients ${r.name}"
-        else
-          found_recipient="${r.name}"
-          found_key_type="cmd"
-          found_key_value="''${${secretEnvName}__${r.env}__AGE_KEY_CMD}"
-        fi
-      fi
-      '') recipientEnvList}
+      '')
+      recipientEnvList}
 
       # If we found a secret-specific key, use it (no conflicts at this level - most specific wins)
       if [[ -n "$found_recipient" ]] && [[ -z "$conflict_recipients" ]]; then
@@ -173,32 +200,33 @@
       conflict_recipients=""
 
       ${lib.concatMapStringsSep "\n      " (r: ''
-      if [[ -n "''${${r.env}__AGE_KEY:-}" ]]; then
-        if [[ -n "$found_recipient" ]]; then
-          conflict_recipients="$conflict_recipients ${r.name}"
-        else
-          found_recipient="${r.name}"
-          found_key_type="key"
-          found_key_value="''${${r.env}__AGE_KEY}"
+        if [[ -n "''${${r.env}__AGE_KEY:-}" ]]; then
+          if [[ -n "$found_recipient" ]]; then
+            conflict_recipients="$conflict_recipients ${r.name}"
+          else
+            found_recipient="${r.name}"
+            found_key_type="key"
+            found_key_value="''${${r.env}__AGE_KEY}"
+          fi
+        elif [[ -n "''${${r.env}__AGE_KEY_FILE:-}" ]]; then
+          if [[ -n "$found_recipient" ]]; then
+            conflict_recipients="$conflict_recipients ${r.name}"
+          else
+            found_recipient="${r.name}"
+            found_key_type="file"
+            found_key_value="''${${r.env}__AGE_KEY_FILE}"
+          fi
+        elif [[ -n "''${${r.env}__AGE_KEY_CMD:-}" ]]; then
+          if [[ -n "$found_recipient" ]]; then
+            conflict_recipients="$conflict_recipients ${r.name}"
+          else
+            found_recipient="${r.name}"
+            found_key_type="cmd"
+            found_key_value="''${${r.env}__AGE_KEY_CMD}"
+          fi
         fi
-      elif [[ -n "''${${r.env}__AGE_KEY_FILE:-}" ]]; then
-        if [[ -n "$found_recipient" ]]; then
-          conflict_recipients="$conflict_recipients ${r.name}"
-        else
-          found_recipient="${r.name}"
-          found_key_type="file"
-          found_key_value="''${${r.env}__AGE_KEY_FILE}"
-        fi
-      elif [[ -n "''${${r.env}__AGE_KEY_CMD:-}" ]]; then
-        if [[ -n "$found_recipient" ]]; then
-          conflict_recipients="$conflict_recipients ${r.name}"
-        else
-          found_recipient="${r.name}"
-          found_key_type="cmd"
-          found_key_value="''${${r.env}__AGE_KEY_CMD}"
-        fi
-      fi
-      '') recipientEnvList}
+      '')
+      recipientEnvList}
 
       # Error if multiple recipient-level vars found
       if [[ -n "$conflict_recipients" ]]; then
@@ -241,160 +269,160 @@
       name = "init-${name}";
       runtimeInputs = [pkgs.sops];
       text = ''
-        ${sopsConfigSetup}
+                ${sopsConfigSetup}
 
-        EXPECTED_FILENAME="${fileName}"
-        DEFAULT_OUTPUT_PATH="${projectOutPath}"
-        OUTPUT_ARG=""
-        INPUT_FILE=""
+                EXPECTED_FILENAME="${fileName}"
+                DEFAULT_OUTPUT_PATH="${projectOutPath}"
+                OUTPUT_ARG=""
+                INPUT_FILE=""
 
-        show_help() {
-          cat <<'HELP'
-init-${name} - Create a new encrypted secret
+                show_help() {
+                  cat <<'HELP'
+        init-${name} - Create a new encrypted secret
 
-USAGE
-    init-${name} [OPTIONS]
+        USAGE
+            init-${name} [OPTIONS]
 
-DESCRIPTION
-    Creates a new SOPS-encrypted secret file for '${name}'.
+        DESCRIPTION
+            Creates a new SOPS-encrypted secret file for '${name}'.
 
-    Without --input, opens $EDITOR to compose the secret interactively.
-    The secret is encrypted using age keys defined in the flake configuration.
+            Without --input, opens $EDITOR to compose the secret interactively.
+            The secret is encrypted using age keys defined in the flake configuration.
 
-OPTIONS
-    --input <path>    Read plaintext content from file or process substitution.
-                      Supports /dev/fd paths for secure secret passing.
+        OPTIONS
+            --input <path>    Read plaintext content from file or process substitution.
+                              Supports /dev/fd paths for secure secret passing.
 
-    --output <path>   Override output location. Can be:
-                      - A directory (appends expected filename)
-                      - A full file path (must match filename: ${fileName})
-                      - /dev/stdout to print encrypted output to screen
-                      Default: ${projectOutPath}
+            --output <path>   Override output location. Can be:
+                              - A directory (appends expected filename)
+                              - A full file path (must match filename: ${fileName})
+                              - /dev/stdout to print encrypted output to screen
+                              Default: ${projectOutPath}
 
-    -h, --help        Show this help message.
+            -h, --help        Show this help message.
 
-EXAMPLES
-    # Interactive: open $EDITOR to enter secret
-    init-${name}
+        EXAMPLES
+            # Interactive: open $EDITOR to enter secret
+            init-${name}
 
-    # From file
-    init-${name} --input ./plaintext-secret.txt
+            # From file
+            init-${name} --input ./plaintext-secret.txt
 
-    # Secure: use process substitution (content never in shell history/ps)
-    init-${name} --input <(cat ./plaintext-secret.txt)
-    init-${name} --input <(pass show my-secret)
-    init-${name} --input <(vault kv get -field=value secret/foo)
+            # Secure: use process substitution (content never in shell history/ps)
+            init-${name} --input <(cat ./plaintext-secret.txt)
+            init-${name} --input <(pass show my-secret)
+            init-${name} --input <(vault kv get -field=value secret/foo)
 
-    # Override output directory
-    init-${name} --output ./secrets/
+            # Override output directory
+            init-${name} --output ./secrets/
 
-    # Print encrypted output to screen (for inspection/piping)
-    init-${name} --input ./secret.txt --output /dev/stdout
+            # Print encrypted output to screen (for inspection/piping)
+            init-${name} --input ./secret.txt --output /dev/stdout
 
-NOTES
-    - The output directory must already exist
-    - Fails if the secret file already exists (use edit/rotate instead)
-    - Format: ${sopsFormat}
-    - Recipients: ${builtins.concatStringsSep ", " (builtins.attrNames config.recipients)}
-HELP
-        }
+        NOTES
+            - The output directory must already exist
+            - Fails if the secret file already exists (use edit/rotate instead)
+            - Format: ${sopsFormat}
+            - Recipients: ${builtins.concatStringsSep ", " (builtins.attrNames config.recipients)}
+        HELP
+                }
 
-        # Parse arguments
-        while [[ $# -gt 0 ]]; do
-          case "$1" in
-            -h|--help)
-              show_help
-              exit 0
-              ;;
-            --output)
-              OUTPUT_ARG="$2"
-              shift 2
-              ;;
-            --output=*)
-              OUTPUT_ARG="''${1#*=}"
-              shift
-              ;;
-            --input)
-              INPUT_FILE="$2"
-              shift 2
-              ;;
-            --input=*)
-              INPUT_FILE="''${1#*=}"
-              shift
-              ;;
-            *)
-              echo "Error: Unknown argument: $1" >&2
-              echo "Run with --help for usage information." >&2
-              exit 1
-              ;;
-          esac
-        done
+                # Parse arguments
+                while [[ $# -gt 0 ]]; do
+                  case "$1" in
+                    -h|--help)
+                      show_help
+                      exit 0
+                      ;;
+                    --output)
+                      OUTPUT_ARG="$2"
+                      shift 2
+                      ;;
+                    --output=*)
+                      OUTPUT_ARG="''${1#*=}"
+                      shift
+                      ;;
+                    --input)
+                      INPUT_FILE="$2"
+                      shift 2
+                      ;;
+                    --input=*)
+                      INPUT_FILE="''${1#*=}"
+                      shift
+                      ;;
+                    *)
+                      echo "Error: Unknown argument: $1" >&2
+                      echo "Run with --help for usage information." >&2
+                      exit 1
+                      ;;
+                  esac
+                done
 
-        # Determine output path (default to project path)
-        if [[ "$OUTPUT_ARG" == "/dev/stdout" ]]; then
-          OUTPUT_PATH="/dev/stdout"
-        elif [[ -n "$OUTPUT_ARG" ]]; then
-          # Determine if output arg is a directory or file path
-          if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
-            # It's a directory (exists or ends with /)
-            OUTPUT_PATH="''${OUTPUT_ARG%/}/$EXPECTED_FILENAME"
-          else
-            # It's a file path - validate the filename matches
-            GIVEN_FILENAME=$(basename "$OUTPUT_ARG")
-            if [[ "$GIVEN_FILENAME" != "$EXPECTED_FILENAME" ]]; then
-              echo "Error: Filename mismatch." >&2
-              echo "  Expected: $EXPECTED_FILENAME" >&2
-              echo "  Given:    $GIVEN_FILENAME" >&2
-              echo "Hint: Use a directory path instead: --output $(dirname "$OUTPUT_ARG")/" >&2
-              exit 1
-            fi
-            OUTPUT_PATH="$OUTPUT_ARG"
-          fi
-        else
-          # Default to project output path
-          OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
-        fi
+                # Determine output path (default to project path)
+                if [[ "$OUTPUT_ARG" == "/dev/stdout" ]]; then
+                  OUTPUT_PATH="/dev/stdout"
+                elif [[ -n "$OUTPUT_ARG" ]]; then
+                  # Determine if output arg is a directory or file path
+                  if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
+                    # It's a directory (exists or ends with /)
+                    OUTPUT_PATH="''${OUTPUT_ARG%/}/$EXPECTED_FILENAME"
+                  else
+                    # It's a file path - validate the filename matches
+                    GIVEN_FILENAME=$(basename "$OUTPUT_ARG")
+                    if [[ "$GIVEN_FILENAME" != "$EXPECTED_FILENAME" ]]; then
+                      echo "Error: Filename mismatch." >&2
+                      echo "  Expected: $EXPECTED_FILENAME" >&2
+                      echo "  Given:    $GIVEN_FILENAME" >&2
+                      echo "Hint: Use a directory path instead: --output $(dirname "$OUTPUT_ARG")/" >&2
+                      exit 1
+                    fi
+                    OUTPUT_PATH="$OUTPUT_ARG"
+                  fi
+                else
+                  # Default to project output path
+                  OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
+                fi
 
-        # Validation for file output (skip for stdout)
-        if [[ "$OUTPUT_PATH" != "/dev/stdout" ]]; then
-          # Check if file already exists
-          if [[ -f "$OUTPUT_PATH" ]]; then
-            echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
-            exit 1
-          fi
+                # Validation for file output (skip for stdout)
+                if [[ "$OUTPUT_PATH" != "/dev/stdout" ]]; then
+                  # Check if file already exists
+                  if [[ -f "$OUTPUT_PATH" ]]; then
+                    echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
+                    exit 1
+                  fi
 
-          # Check parent directory exists
-          OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
-          if [[ ! -d "$OUTPUT_DIR" ]]; then
-            echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
-            exit 1
-          fi
-        fi
+                  # Check parent directory exists
+                  OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+                  if [[ ! -d "$OUTPUT_DIR" ]]; then
+                    echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
+                    exit 1
+                  fi
+                fi
 
-        # Encrypt and write
-        if [[ -n "$INPUT_FILE" ]]; then
-          # Read content from file (supports process substitution)
-          if sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -e "$INPUT_FILE" > "$OUTPUT_PATH"; then
-            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
-          else
-            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-            echo "Error: Failed to encrypt secret" >&2
-            exit 1
-          fi
-        else
-          # Use editor
-          if sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               "$OUTPUT_PATH"; then
-            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
-          else
-            [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-            echo "Error: Failed to create secret" >&2
-            exit 1
-          fi
-        fi
+                # Encrypt and write
+                if [[ -n "$INPUT_FILE" ]]; then
+                  # Read content from file (supports process substitution)
+                  if sops --config <(echo "$SOPS_CONFIG") \
+                       --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                       -e "$INPUT_FILE" > "$OUTPUT_PATH"; then
+                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
+                  else
+                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+                    echo "Error: Failed to encrypt secret" >&2
+                    exit 1
+                  fi
+                else
+                  # Use editor
+                  if sops --config <(echo "$SOPS_CONFIG") \
+                       --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                       "$OUTPUT_PATH"; then
+                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
+                  else
+                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+                    echo "Error: Failed to create secret" >&2
+                    exit 1
+                  fi
+                fi
       '';
     };
 
@@ -406,175 +434,179 @@ HELP
     resolved = resolveKeyCmd pkgs keyCmd;
     fmtCfg = formatConfig pkgs;
     # Build-time key command (from builder pattern)
-    builtinKeyCmd = if resolved.cmd != null then "\"${resolved.cmd}\"" else "";
+    builtinKeyCmd =
+      if resolved.cmd != null
+      then "\"${resolved.cmd}\""
+      else "";
     # Generate recipient env var examples for help text
     recipientEnvExamples = lib.concatMapStringsSep "\n    " (rName: let
       envName = toEnvVar rName;
     in ''
-${secretEnvName}__${envName}__AGE_KEY_CMD   Secret-specific for ${rName}
-    ${envName}__AGE_KEY_CMD                 All secrets for ${rName}'') recipientNamesList;
+      ${secretEnvName}__${envName}__AGE_KEY_CMD   Secret-specific for ${rName}
+          ${envName}__AGE_KEY_CMD                 All secrets for ${rName}'')
+    recipientNamesList;
   in
     assert config._exists || throw "Secret '${name}' does not exist at ${storePath}. Create it with init first.";
-    pkgs.writeShellApplication {
-      name = "decrypt-${name}";
-      runtimeInputs = [pkgs.sops] ++ fmtCfg.runtimeInputs ++ (lib.optional (resolved.pkg != null) resolved.pkg);
-      text = ''
-        ${sopsConfigSetup}
-        ${recipientEnvVarResolution}
+      pkgs.writeShellApplication {
+        name = "decrypt-${name}";
+        runtimeInputs = [pkgs.sops] ++ fmtCfg.runtimeInputs ++ (lib.optional (resolved.pkg != null) resolved.pkg);
+        text = ''
+                  ${sopsConfigSetup}
+                  ${recipientEnvVarResolution}
 
-        INPUT_PATH="${storePath}"
-        OUTPUT_PATH="/dev/stdout"
-        BUILTIN_KEY_CMD=${builtinKeyCmd}
+                  INPUT_PATH="${storePath}"
+                  OUTPUT_PATH="/dev/stdout"
+                  BUILTIN_KEY_CMD=${builtinKeyCmd}
 
-        show_help() {
-          cat <<'HELP'
-decrypt-${name} - Decrypt a secret
+                  show_help() {
+                    cat <<'HELP'
+          decrypt-${name} - Decrypt a secret
 
-USAGE
-    decrypt-${name} [OPTIONS]
+          USAGE
+              decrypt-${name} [OPTIONS]
 
-DESCRIPTION
-    Decrypts the SOPS-encrypted secret '${name}' and outputs the plaintext.
+          DESCRIPTION
+              Decrypts the SOPS-encrypted secret '${name}' and outputs the plaintext.
 
-    By default outputs to stdout.
-    Key resolution order (first match wins):
-      1. --sopsAgeKey (direct key value)
-      2. --sopsAgeKeyFile (path to key file)
-      3. --sopsAgeKeyCmd (command that outputs key)
-      4. ${secretEnvName}__<RECIPIENT>__AGE_KEY[_FILE|_CMD] (secret-specific)
-      5. <RECIPIENT>__AGE_KEY[_FILE|_CMD] (recipient-level)
-      6. SOPS_AGE_KEY[_FILE|_CMD] (global)
-      7. Builder-configured key command (if any)
+              By default outputs to stdout.
+              Key resolution order (first match wins):
+                1. --sopsAgeKey (direct key value)
+                2. --sopsAgeKeyFile (path to key file)
+                3. --sopsAgeKeyCmd (command that outputs key)
+                4. ${secretEnvName}__<RECIPIENT>__AGE_KEY[_FILE|_CMD] (secret-specific)
+                5. <RECIPIENT>__AGE_KEY[_FILE|_CMD] (recipient-level)
+                6. SOPS_AGE_KEY[_FILE|_CMD] (global)
+                7. Builder-configured key command (if any)
 
-OPTIONS
-    --output <path>       Write plaintext to file instead of stdout.
-                          Default: /dev/stdout
+          OPTIONS
+              --output <path>       Write plaintext to file instead of stdout.
+                                    Default: /dev/stdout
 
-    --sopsAgeKey <key>    Use this age secret key directly.
-                          WARNING: Visible in process list. Prefer --sopsAgeKeyCmd.
+              --sopsAgeKey <key>    Use this age secret key directly.
+                                    WARNING: Visible in process list. Prefer --sopsAgeKeyCmd.
 
-    --sopsAgeKeyFile <path>
-                          Read age secret key from this file.
+              --sopsAgeKeyFile <path>
+                                    Read age secret key from this file.
 
-    --sopsAgeKeyCmd <cmd> Run this command to get the age secret key.
-                          Recommended for security (e.g., fetch from keyring).
+              --sopsAgeKeyCmd <cmd> Run this command to get the age secret key.
+                                    Recommended for security (e.g., fetch from keyring).
 
-    -h, --help            Show this help message.
+              -h, --help            Show this help message.
 
-EXAMPLES
-    # Decrypt to stdout (default)
-    decrypt-${name}
+          EXAMPLES
+              # Decrypt to stdout (default)
+              decrypt-${name}
 
-    # Decrypt to file
-    decrypt-${name} --output ./plaintext.txt
+              # Decrypt to file
+              decrypt-${name} --output ./plaintext.txt
 
-    # Use key from command (secure)
-    decrypt-${name} --sopsAgeKeyCmd "pass show age-key"
+              # Use key from command (secure)
+              decrypt-${name} --sopsAgeKeyCmd "pass show age-key"
 
-    # Use key from file
-    decrypt-${name} --sopsAgeKeyFile ~/.config/sops/age/keys.txt
+              # Use key from file
+              decrypt-${name} --sopsAgeKeyFile ~/.config/sops/age/keys.txt
 
-    # Pipe to another command
-    decrypt-${name} | jq .
+              # Pipe to another command
+              decrypt-${name} | jq .
 
-ENVIRONMENT
-    Recipient-specific env vars (for this secret's recipients):
-    ${recipientEnvExamples}
+          ENVIRONMENT
+              Recipient-specific env vars (for this secret's recipients):
+              ${recipientEnvExamples}
 
-    Global env vars:
-    SOPS_AGE_KEY          Age secret key (direct value)
-    SOPS_AGE_KEY_FILE     Path to age secret key file
-    SOPS_AGE_KEY_CMD      Command to retrieve age secret key
+              Global env vars:
+              SOPS_AGE_KEY          Age secret key (direct value)
+              SOPS_AGE_KEY_FILE     Path to age secret key file
+              SOPS_AGE_KEY_CMD      Command to retrieve age secret key
 
-    Example .envrc.local (gitignored):
-      export BOB__AGE_KEY_CMD="pass show age/bob-key"
+              Example .envrc.local (gitignored):
+                export BOB__AGE_KEY_CMD="pass show age/bob-key"
 
-RECIPIENTS
-    ${builtins.concatStringsSep ", " recipientNamesList}
+          RECIPIENTS
+              ${builtins.concatStringsSep ", " recipientNamesList}
 
-NOTES
-    - Format: ${sopsFormat}
-    - Source: ${storePath}
-HELP
-        }
+          NOTES
+              - Format: ${sopsFormat}
+              - Source: ${storePath}
+          HELP
+                  }
 
-        # Parse arguments
-        while [[ $# -gt 0 ]]; do
-          case "$1" in
-            -h|--help)
-              show_help
-              exit 0
-              ;;
-            --output)
-              OUTPUT_PATH="$2"
-              shift 2
-              ;;
-            --output=*)
-              OUTPUT_PATH="''${1#*=}"
-              shift
-              ;;
-            --sopsAgeKey)
-              export SOPS_AGE_KEY="$2"
-              shift 2
-              ;;
-            --sopsAgeKey=*)
-              export SOPS_AGE_KEY="''${1#*=}"
-              shift
-              ;;
-            --sopsAgeKeyFile)
-              export SOPS_AGE_KEY_FILE="$2"
-              shift 2
-              ;;
-            --sopsAgeKeyFile=*)
-              export SOPS_AGE_KEY_FILE="''${1#*=}"
-              shift
-              ;;
-            --sopsAgeKeyCmd)
-              export SOPS_AGE_KEY_CMD="$2"
-              shift 2
-              ;;
-            --sopsAgeKeyCmd=*)
-              export SOPS_AGE_KEY_CMD="''${1#*=}"
-              shift
-              ;;
-            *)
-              echo "Error: Unknown argument: $1" >&2
-              echo "Run with --help for usage information." >&2
-              exit 1
-              ;;
-          esac
-        done
+                  # Parse arguments
+                  while [[ $# -gt 0 ]]; do
+                    case "$1" in
+                      -h|--help)
+                        show_help
+                        exit 0
+                        ;;
+                      --output)
+                        OUTPUT_PATH="$2"
+                        shift 2
+                        ;;
+                      --output=*)
+                        OUTPUT_PATH="''${1#*=}"
+                        shift
+                        ;;
+                      --sopsAgeKey)
+                        export SOPS_AGE_KEY="$2"
+                        shift 2
+                        ;;
+                      --sopsAgeKey=*)
+                        export SOPS_AGE_KEY="''${1#*=}"
+                        shift
+                        ;;
+                      --sopsAgeKeyFile)
+                        export SOPS_AGE_KEY_FILE="$2"
+                        shift 2
+                        ;;
+                      --sopsAgeKeyFile=*)
+                        export SOPS_AGE_KEY_FILE="''${1#*=}"
+                        shift
+                        ;;
+                      --sopsAgeKeyCmd)
+                        export SOPS_AGE_KEY_CMD="$2"
+                        shift 2
+                        ;;
+                      --sopsAgeKeyCmd=*)
+                        export SOPS_AGE_KEY_CMD="''${1#*=}"
+                        shift
+                        ;;
+                      *)
+                        echo "Error: Unknown argument: $1" >&2
+                        echo "Run with --help for usage information." >&2
+                        exit 1
+                        ;;
+                    esac
+                  done
 
-        # Key resolution: CLI flags already set SOPS_AGE_* above if provided
-        # Now check recipient env vars if no CLI flags were used
-        if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
-          # Try recipient-based env var resolution
-          if ! resolve_recipient_key; then
-            # No recipient env vars found, try builtin key command
-            if [[ -n "$BUILTIN_KEY_CMD" ]]; then
-              export SOPS_AGE_KEY_CMD="$BUILTIN_KEY_CMD"
-            fi
-          fi
-        fi
+                  # Key resolution: CLI flags already set SOPS_AGE_* above if provided
+                  # Now check recipient env vars if no CLI flags were used
+                  if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
+                    # Try recipient-based env var resolution
+                    if ! resolve_recipient_key; then
+                      # No recipient env vars found, try builtin key command
+                      if [[ -n "$BUILTIN_KEY_CMD" ]]; then
+                        export SOPS_AGE_KEY_CMD="$BUILTIN_KEY_CMD"
+                      fi
+                    fi
+                  fi
 
-        # Decrypt
-        if [[ "$OUTPUT_PATH" == "/dev/stdout" ]]; then
-          sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -d "$INPUT_PATH"${fmtCfg.pipe}
-        else
-          if sops --config <(echo "$SOPS_CONFIG") \
-               --input-type ${sopsFormat} --output-type ${sopsFormat} \
-               -d "$INPUT_PATH"${fmtCfg.pipe} > "$OUTPUT_PATH"; then
-            echo "Decrypted: $OUTPUT_PATH" >&2
-          else
-            [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-            echo "Error: Failed to decrypt secret" >&2
-            exit 1
-          fi
-        fi
-      '';
-    };
+                  # Decrypt
+                  if [[ "$OUTPUT_PATH" == "/dev/stdout" ]]; then
+                    sops --config <(echo "$SOPS_CONFIG") \
+                         --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                         -d "$INPUT_PATH"${fmtCfg.pipe}
+                  else
+                    if sops --config <(echo "$SOPS_CONFIG") \
+                         --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                         -d "$INPUT_PATH"${fmtCfg.pipe} > "$OUTPUT_PATH"; then
+                      echo "Decrypted: $OUTPUT_PATH" >&2
+                    else
+                      [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+                      echo "Error: Failed to decrypt secret" >&2
+                      exit 1
+                    fi
+                  fi
+        '';
+      };
 
   # ============================================================================
   # EDIT OPERATION
@@ -724,25 +756,45 @@ HELP
     pkg = mkOpFn currentOpts pkgs;
   in
     pkg.overrideAttrs (old: {
-      passthru = (old.passthru or {}) // {
-        # .withSopsAgeKeyCmd "command" - string command
-        withSopsAgeKeyCmd = cmd:
-          mkBuilderPkg mkOpFn
-          (currentOpts // {keyCmd = {type = "string"; value = cmd;};})
-          pkgs;
+      passthru =
+        (old.passthru or {})
+        // {
+          # .withSopsAgeKeyCmd "command" - string command
+          withSopsAgeKeyCmd = cmd:
+            mkBuilderPkg mkOpFn
+            (currentOpts
+              // {
+                keyCmd = {
+                  type = "string";
+                  value = cmd;
+                };
+              })
+            pkgs;
 
-        # .withSopsAgeKeyCmdPkg drv - derivation
-        withSopsAgeKeyCmdPkg = pkg:
-          mkBuilderPkg mkOpFn
-          (currentOpts // {keyCmd = {type = "pkg"; value = pkg;};})
-          pkgs;
+          # .withSopsAgeKeyCmdPkg drv - derivation
+          withSopsAgeKeyCmdPkg = pkg:
+            mkBuilderPkg mkOpFn
+            (currentOpts
+              // {
+                keyCmd = {
+                  type = "pkg";
+                  value = pkg;
+                };
+              })
+            pkgs;
 
-        # .buildSopsAgeKeyCmdPkg (pkgs: drv) - function
-        buildSopsAgeKeyCmdPkg = fn:
-          mkBuilderPkg mkOpFn
-          (currentOpts // {keyCmd = {type = "build"; value = fn;};})
-          pkgs;
-      };
+          # .buildSopsAgeKeyCmdPkg (pkgs: drv) - function
+          buildSopsAgeKeyCmdPkg = fn:
+            mkBuilderPkg mkOpFn
+            (currentOpts
+              // {
+                keyCmd = {
+                  type = "build";
+                  value = fn;
+                };
+              })
+            pkgs;
+        };
     });
 
   # ============================================================================
@@ -756,137 +808,141 @@ HELP
     pkgs.writeShellApplication {
       name = "env-${name}";
       text = ''
-        RECIPIENT=""
+                RECIPIENT=""
 
-        show_help() {
-          cat <<'HELP'
-env-${name} - Output environment variable template for decryption
+                show_help() {
+                  cat <<'HELP'
+        env-${name} - Output environment variable template for decryption
 
-USAGE
-    env-${name} [OPTIONS]
+        USAGE
+            env-${name} [OPTIONS]
 
-DESCRIPTION
-    Outputs commented environment variable assignments that can be used
-    to configure decryption keys for the '${name}' secret.
+        DESCRIPTION
+            Outputs commented environment variable assignments that can be used
+            to configure decryption keys for the '${name}' secret.
 
-    Pipe or redirect to a file, then uncomment and configure your recipient.
+            Pipe or redirect to a file, then uncomment and configure your recipient.
 
-OPTIONS
-    --recipient <name>    Filter output to a specific recipient
-    -h, --help            Show this help message
+        OPTIONS
+            --recipient <name>    Filter output to a specific recipient
+            -h, --help            Show this help message
 
-RECIPIENTS
-    ${builtins.concatStringsSep ", " recipientNames}
+        RECIPIENTS
+            ${builtins.concatStringsSep ", " recipientNames}
 
-EXAMPLES
-    # Output all env vars for this secret
-    env-${name}
+        EXAMPLES
+            # Output all env vars for this secret
+            env-${name}
 
-    # Output env vars for specific recipient
-    env-${name} --recipient alice
+            # Output env vars for specific recipient
+            env-${name} --recipient alice
 
-    # Append to an env file
-    env-${name} --recipient alice >> .envrc.secret
+            # Append to an env file
+            env-${name} --recipient alice >> .envrc.secret
 
-HELP
-        }
+        HELP
+                }
 
-        output_header() {
-          if [[ -n "$RECIPIENT" ]]; then
-            echo "# Environment variables for decrypting '${name}' as recipient '$RECIPIENT'"
-          else
-            echo "# Environment variables for decrypting '${name}'"
-          fi
-          echo "#"
-          echo "# Resolution order (first match wins):"
-          echo "#   1. CLI flags (--sopsAgeKey, --sopsAgeKeyFile, --sopsAgeKeyCmd)"
-          echo "#   2. Secret-specific recipient vars (${secretEnvName}__<RECIPIENT>__AGE_KEY*)"
-          echo "#   3. Recipient-level vars (<RECIPIENT>__AGE_KEY*)"
-          echo "#   4. Global SOPS vars (SOPS_AGE_KEY*)"
-          echo "#   5. Builder-configured key command (if any)"
-          echo "#"
-          if [[ -z "$RECIPIENT" ]]; then
-            echo "# Recipients: ${builtins.concatStringsSep ", " recipientNames}"
-            echo "#"
-          fi
-          echo ""
-        }
+                output_header() {
+                  if [[ -n "$RECIPIENT" ]]; then
+                    echo "# Environment variables for decrypting '${name}' as recipient '$RECIPIENT'"
+                  else
+                    echo "# Environment variables for decrypting '${name}'"
+                  fi
+                  echo "#"
+                  echo "# Resolution order (first match wins):"
+                  echo "#   1. CLI flags (--sopsAgeKey, --sopsAgeKeyFile, --sopsAgeKeyCmd)"
+                  echo "#   2. Secret-specific recipient vars (${secretEnvName}__<RECIPIENT>__AGE_KEY*)"
+                  echo "#   3. Recipient-level vars (<RECIPIENT>__AGE_KEY*)"
+                  echo "#   4. Global SOPS vars (SOPS_AGE_KEY*)"
+                  echo "#   5. Builder-configured key command (if any)"
+                  echo "#"
+                  if [[ -z "$RECIPIENT" ]]; then
+                    echo "# Recipients: ${builtins.concatStringsSep ", " recipientNames}"
+                    echo "#"
+                  fi
+                  echo ""
+                }
 
-        output_recipient_vars() {
-          local r="$1"
-          local r_env="$2"
+                output_recipient_vars() {
+                  local r="$1"
+                  local r_env="$2"
 
-          echo "# --- Secret-specific (${name} + $r) ---"
-          echo "# ${secretEnvName}__''${r_env}__AGE_KEY=\"\""
-          echo "# ${secretEnvName}__''${r_env}__AGE_KEY_FILE=\"\""
-          echo "# ${secretEnvName}__''${r_env}__AGE_KEY_CMD=\"\""
-          echo ""
-          echo "# --- Recipient-level ($r, all secrets) ---"
-          echo "# ''${r_env}__AGE_KEY=\"\""
-          echo "# ''${r_env}__AGE_KEY_FILE=\"\""
-          echo "# ''${r_env}__AGE_KEY_CMD=\"\""
-          echo ""
-        }
+                  echo "# --- Secret-specific (${name} + $r) ---"
+                  echo "# ${secretEnvName}__''${r_env}__AGE_KEY=\"\""
+                  echo "# ${secretEnvName}__''${r_env}__AGE_KEY_FILE=\"\""
+                  echo "# ${secretEnvName}__''${r_env}__AGE_KEY_CMD=\"\""
+                  echo ""
+                  echo "# --- Recipient-level ($r, all secrets) ---"
+                  echo "# ''${r_env}__AGE_KEY=\"\""
+                  echo "# ''${r_env}__AGE_KEY_FILE=\"\""
+                  echo "# ''${r_env}__AGE_KEY_CMD=\"\""
+                  echo ""
+                }
 
-        output_global_vars() {
-          echo "# --- Global (any secret, any recipient) ---"
-          echo "# SOPS_AGE_KEY=\"\""
-          echo "# SOPS_AGE_KEY_FILE=\"\""
-          echo "# SOPS_AGE_KEY_CMD=\"\""
-        }
+                output_global_vars() {
+                  echo "# --- Global (any secret, any recipient) ---"
+                  echo "# SOPS_AGE_KEY=\"\""
+                  echo "# SOPS_AGE_KEY_FILE=\"\""
+                  echo "# SOPS_AGE_KEY_CMD=\"\""
+                }
 
-        # Parse arguments
-        while [[ $# -gt 0 ]]; do
-          case "$1" in
-            -h|--help)
-              show_help
-              exit 0
-              ;;
-            --recipient)
-              RECIPIENT="$2"
-              shift 2
-              ;;
-            --recipient=*)
-              RECIPIENT="''${1#*=}"
-              shift
-              ;;
-            *)
-              echo "Error: Unknown argument: $1" >&2
-              echo "Run with --help for usage information." >&2
-              exit 1
-              ;;
-          esac
-        done
+                # Parse arguments
+                while [[ $# -gt 0 ]]; do
+                  case "$1" in
+                    -h|--help)
+                      show_help
+                      exit 0
+                      ;;
+                    --recipient)
+                      RECIPIENT="$2"
+                      shift 2
+                      ;;
+                    --recipient=*)
+                      RECIPIENT="''${1#*=}"
+                      shift
+                      ;;
+                    *)
+                      echo "Error: Unknown argument: $1" >&2
+                      echo "Run with --help for usage information." >&2
+                      exit 1
+                      ;;
+                  esac
+                done
 
-        # Validate recipient if specified
-        if [[ -n "$RECIPIENT" ]]; then
-          case "$RECIPIENT" in
-            ${builtins.concatStringsSep "|" recipientNames})
-              ;;
-            *)
-              echo "Error: Unknown recipient: $RECIPIENT" >&2
-              echo "Valid recipients: ${builtins.concatStringsSep ", " recipientNames}" >&2
-              exit 1
-              ;;
-          esac
-        fi
+                # Validate recipient if specified
+                if [[ -n "$RECIPIENT" ]]; then
+                  case "$RECIPIENT" in
+                    ${builtins.concatStringsSep "|" recipientNames})
+                      ;;
+                    *)
+                      echo "Error: Unknown recipient: $RECIPIENT" >&2
+                      echo "Valid recipients: ${builtins.concatStringsSep ", " recipientNames}" >&2
+                      exit 1
+                      ;;
+                  esac
+                fi
 
-        output_header
+                output_header
 
-        if [[ -n "$RECIPIENT" ]]; then
-          # Output for specific recipient
-          case "$RECIPIENT" in
-            ${builtins.concatStringsSep "\n            " (lib.zipListsWith (r: rEnv: ''${r})
-              output_recipient_vars "${r}" "${rEnv}"
-              ;;'') recipientNames recipientEnvNames)}
-          esac
-        else
-          # Output for all recipients
-          ${builtins.concatStringsSep "\n          " (lib.zipListsWith (r: rEnv: ''
-          output_recipient_vars "${r}" "${rEnv}"'') recipientNames recipientEnvNames)}
-        fi
+                if [[ -n "$RECIPIENT" ]]; then
+                  # Output for specific recipient
+                  case "$RECIPIENT" in
+                    ${builtins.concatStringsSep "\n            " (lib.zipListsWith (r: rEnv: ''            ${r})
+                          output_recipient_vars "${r}" "${rEnv}"
+                          ;;'')
+          recipientNames
+          recipientEnvNames)}
+                  esac
+                else
+                  # Output for all recipients
+                  ${builtins.concatStringsSep "\n          " (lib.zipListsWith (r: rEnv: ''
+            output_recipient_vars "${r}" "${rEnv}"'')
+          recipientNames
+          recipientEnvNames)}
+                fi
 
-        output_global_vars
+                output_global_vars
       '';
     };
 
@@ -895,19 +951,25 @@ HELP
     basePkg = mkBuilderPkg mkDecrypt {keyCmd = null;} pkgs;
     # Build recipient-specific decrypt packages for those with decryptPkg
     recipientsWithDecrypt = lib.filterAttrs (_: r: r.decryptPkg != null) config.recipients;
-    recipientPkgs = lib.mapAttrs (recipientName: recipient:
-      mkBuilderPkg mkDecrypt {
-        keyCmd = {
-          type = "build";
-          value = recipient.decryptPkg;
-        };
-      } pkgs
-    ) recipientsWithDecrypt;
+    recipientPkgs =
+      lib.mapAttrs (
+        recipientName: recipient:
+          mkBuilderPkg mkDecrypt {
+            keyCmd = {
+              type = "build";
+              value = recipient.decryptPkg;
+            };
+          }
+          pkgs
+      )
+      recipientsWithDecrypt;
   in
     basePkg.overrideAttrs (old: {
-      passthru = (old.passthru or {}) // {
-        recipient = recipientPkgs;
-      };
+      passthru =
+        (old.passthru or {})
+        // {
+          recipient = recipientPkgs;
+        };
     });
   editPkg = pkgs: mkBuilderPkg mkEdit {keyCmd = null;} pkgs;
   rotatePkg = pkgs: mkBuilderPkg mkRotate {keyCmd = null;} pkgs;
@@ -917,7 +979,6 @@ HELP
   # When secret exists: decrypt, edit, rotate, rekey available
   # When secret doesn't exist: only init available
   exists = config._exists;
-
 in {
   options =
     # Operations available when secret EXISTS (decrypt, edit, rotate, rekey)
