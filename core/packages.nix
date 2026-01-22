@@ -8,19 +8,14 @@
 #   secrets.<name>.rotate           # Rotate operation
 #   secrets.<name>.rekey            # Rekey operation
 #   secrets.<name>.init             # Init operation
-#   secrets.env                     # Env file management tool
+#   secrets.<name>.env              # Env var template output
 #
-{lib}: {
-  secrets,
-  envFile ? null,  # Optional path to env file (e.g., "~/.config/myproject/secrets.env")
-}: pkgs: let
+{lib}: secrets: pkgs: let
   inherit (lib) mapAttrs attrNames concatStringsSep filterAttrs;
 
   # Reserved names that cannot be used as secret names
   # These conflict with derivation attributes or reserved sub-packages
   reservedNames = [
-    # Reserved sub-packages
-    "env"
     # Common derivation attributes that would conflict with passthru
     "name"
     "meta"
@@ -84,8 +79,13 @@
     });
 
   # All secret packages
-  secretPackages = mapAttrs mkSecretPackage evaluatedSecrets;
-  secretNames = attrNames evaluatedSecrets;
+  secretPackages = mapAttrs mkSecretPackage secrets;
+  secretNames = attrNames secrets;
+
+  # Collect all unique recipients across all secrets
+  allRecipients = lib.unique (lib.flatten (
+    lib.mapAttrsToList (_: secret: attrNames secret.recipients) secrets
+  ));
 
   # Top-level secrets package
   base = pkgs.writeShellApplication {
@@ -96,6 +96,9 @@
       echo "Secrets:"
       ${concatStringsSep "\n" (map (s: ''echo "  - ${s}"'') secretNames)}
       echo ""
+      echo "Recipients:"
+      ${concatStringsSep "\n" (map (r: ''echo "  - ${r}"'') allRecipients)}
+      echo ""
       echo "Usage:"
       echo "  nix run .#secrets.<name>              Show secret info"
       echo "  nix run .#secrets.<name>.init         Create new secret"
@@ -103,6 +106,7 @@
       echo "  nix run .#secrets.<name>.edit         Edit secret"
       echo "  nix run .#secrets.<name>.rotate       Rotate secret value"
       echo "  nix run .#secrets.<name>.rekey        Re-encrypt with current recipients"
+      echo "  nix run .#secrets.<name>.env          Output env var template"
     '';
   };
 in
