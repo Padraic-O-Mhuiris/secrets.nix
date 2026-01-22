@@ -66,7 +66,7 @@
       perSystem = {pkgs, ...}: let
         nix-unit = inputs.nix-unit.packages.${pkgs.system}.default;
         # Shared test expression string for both check and package
-        unitTestExpr = ''(import ${./tests/unit} {lib = import ${pkgs.path}/lib; pkgs = import ${pkgs.path} {system = "${pkgs.system}";}; corePath = ${./core};})'';
+        unitTestExpr = ''(import ${./tests/unit} {lib = import ${pkgs.path}/lib; pkgs = import ${pkgs.path} {system = "${pkgs.system}";}; corePath = ${./core}; fixturesPath = ${./tests/fixtures};})'';
       in {
         devShells.default = pkgs.mkShell {
           packages = [
