@@ -89,6 +89,14 @@
         };
 
         checks = testsModule.checks;
+
+        formatter = pkgs.writeShellApplication {
+          name = "fmt";
+          runtimeInputs = [pkgs.alejandra pkgs.findutils];
+          text = ''
+            find . -name '*.nix' -exec alejandra "$@" {} +
+          '';
+        };
       };
 
       flake = {
