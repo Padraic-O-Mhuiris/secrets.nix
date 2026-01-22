@@ -39,9 +39,10 @@
   # Validate secret names
   invalidNames = filterAttrs (name: _: builtins.elem name reservedNames) secrets;
   invalidNamesList = attrNames invalidNames;
-  validatedSecrets = if invalidNamesList != []
-      then throw "Invalid secret name(s): ${concatStringsSep ", " invalidNamesList}. These names are reserved: ${concatStringsSep ", " reservedNames}"
-      else secrets;
+  validatedSecrets =
+    if invalidNamesList != []
+    then throw "Invalid secret name(s): ${concatStringsSep ", " invalidNamesList}. These names are reserved: ${concatStringsSep ", " reservedNames}"
+    else secrets;
 
   # Get operation names for display
   operationNames = secret: attrNames secret.__operations;
@@ -54,7 +55,10 @@
   mkSecretPackage = secretName: secret: let
     operations = buildOperationPackages secret;
     opNames = operationNames secret;
-    existsStatus = if secret._exists then "exists" else "not created";
+    existsStatus =
+      if secret._exists
+      then "exists"
+      else "not created";
 
     base = pkgs.writeShellApplication {
       name = "secret-${secretName}";

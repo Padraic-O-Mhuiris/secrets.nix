@@ -82,7 +82,8 @@
           fullPath = builtins.toString config._path;
           parts = lib.splitString "/" fullPath;
           relativeParts = lib.drop 4 parts;
-        in "./" + lib.concatStringsSep "/" relativeParts;
+        in
+          "./" + lib.concatStringsSep "/" relativeParts;
         description = "Relative path from flake root";
       };
 

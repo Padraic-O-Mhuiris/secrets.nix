@@ -50,7 +50,6 @@
       nix-unit --expr '${groupExpr group}'
       touch $out
     '';
-
 in {
   # Individual group checks
   checks =
