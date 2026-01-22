@@ -14,10 +14,7 @@
     };
   };
 
-  outputs = inputs @ {
-    flake-parts,
-    ...
-  }: let
+  outputs = inputs @ {flake-parts, ...}: let
     inherit (inputs.nixpkgs) lib;
     inherit (import ./core {inherit lib;}) mkSecrets mkSecretsPackages;
 
@@ -94,22 +91,24 @@
         checks =
           testsModule.checks
           // {
-            lint-statix = pkgs.runCommand "lint-statix" {
-              nativeBuildInputs = [pkgs.statix];
-              src = ./.;
-            } ''
-              cd $src
-              statix check .
-              touch $out
-            '';
-            lint-deadnix = pkgs.runCommand "lint-deadnix" {
-              nativeBuildInputs = [pkgs.deadnix];
-              src = ./.;
-            } ''
-              cd $src
-              deadnix --fail .
-              touch $out
-            '';
+            lint-statix =
+              pkgs.runCommand "lint-statix" {
+                nativeBuildInputs = [pkgs.statix];
+                src = ./.;
+              } ''
+                cd $src
+                statix check .
+                touch $out
+              '';
+            lint-deadnix =
+              pkgs.runCommand "lint-deadnix" {
+                nativeBuildInputs = [pkgs.deadnix];
+                src = ./.;
+              } ''
+                cd $src
+                deadnix --fail .
+                touch $out
+              '';
           };
 
         formatter = pkgs.writeShellApplication {
