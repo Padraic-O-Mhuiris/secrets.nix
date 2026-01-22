@@ -85,7 +85,6 @@
         in {
           inherit secrets;
           inherit (testsModule.packages) unit-tests;
-
           decrypt-api-key = secrets.api-key.decrypt.recipient.alice;
         };
 
@@ -94,10 +93,6 @@
 
       flake = {
         inherit mkSecrets mkSecretsPackages example;
-
-        # Tests accessible via: nix-unit --flake .#tests
-        # Or: nix flake check
-        tests = import ./tests/unit {inherit lib;};
       };
     };
 }
