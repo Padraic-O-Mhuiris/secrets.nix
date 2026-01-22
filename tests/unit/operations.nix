@@ -1,6 +1,6 @@
 # Operations module tests (structure and availability)
 {ctx}: let
-  inherit (ctx) lib mkSecrets testDir validAgeKey1 validAgeKey2 validAgeKey3;
+  inherit (ctx) lib mkSecrets testDir validAgeKey1 validAgeKey2;
 
   # Common test secret config for nonexistent path
   nonexistentDir = /tmp/nonexistent-12345;
@@ -304,15 +304,7 @@ in {
   };
 
   testEnvVarNameDerivation = {
-    expr = let
-      secrets = mkSecrets {
-        "api-key" = {
-          dir = nonexistentDir;
-          recipients.alice = {key = validAgeKey1;};
-        };
-      };
-    in
-      lib.hasInfix "-" "api-key";
+    expr = lib.hasInfix "-" "api-key";
     expected = true;
   };
 

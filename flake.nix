@@ -16,7 +16,6 @@
 
   outputs = inputs @ {
     flake-parts,
-    self,
     ...
   }: let
     inherit (inputs.nixpkgs) lib;
