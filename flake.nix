@@ -3,7 +3,11 @@
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
+    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix-unit.url = "github:nix-community/nix-unit";
+    nix-unit.inputs.nixpkgs.follows = "nixpkgs";
+    nix-unit.inputs.flake-parts.follows = "flake-parts";
   };
 
   outputs = inputs @ {
@@ -61,7 +65,12 @@
 
       perSystem = {pkgs, ...}: {
         devShells.default = pkgs.mkShell {
-          packages = [pkgs.alejandra pkgs.sops pkgs.age];
+          packages = [
+            pkgs.alejandra
+            pkgs.sops
+            pkgs.age
+            inputs.nix-unit.packages.${pkgs.system}.default
+          ];
         };
 
         packages = let
@@ -71,10 +80,22 @@
 
           decrypt-api-key = secrets.api-key.decrypt.recipient.alice;
         };
+
+        checks.unit-tests = pkgs.runCommand "unit-tests" {
+          nativeBuildInputs = [inputs.nix-unit.packages.${pkgs.system}.default];
+        } ''
+          export HOME=$(mktemp -d)
+          nix-unit --expr '(import ${./tests/unit} {lib = import ${pkgs.path}/lib; corePath = ${./core};})'
+          touch $out
+        '';
       };
 
       flake = {
         inherit mkSecrets mkSecretsPackages example;
+
+        # Tests accessible via: nix-unit --flake .#tests
+        # Or: nix flake check
+        tests = import ./tests/unit {inherit lib;};
       };
     };
 }
