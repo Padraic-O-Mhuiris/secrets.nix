@@ -21,5 +21,8 @@ jobs:
           name: secrets-nix
           extraPullNames: nix-community
 
+      - name: Check formatting
+        run: nix fmt -- --check .
+
       - name: Run checks
         run: nix flake check
