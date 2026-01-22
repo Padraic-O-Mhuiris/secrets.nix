@@ -8,9 +8,45 @@
 #   secrets.<name>.rotate           # Rotate operation
 #   secrets.<name>.rekey            # Rekey operation
 #   secrets.<name>.init             # Init operation
+#   secrets.env                     # Env file management tool
 #
-{lib}: evaluatedSecrets: pkgs: let
-  inherit (lib) mapAttrs attrNames concatStringsSep;
+{lib}: {
+  secrets,
+  envFile ? null,  # Optional path to env file (e.g., "~/.config/myproject/secrets.env")
+}: pkgs: let
+  inherit (lib) mapAttrs attrNames concatStringsSep filterAttrs;
+
+  # Reserved names that cannot be used as secret names
+  # These conflict with derivation attributes or reserved sub-packages
+  reservedNames = [
+    # Reserved sub-packages
+    "env"
+    # Common derivation attributes that would conflict with passthru
+    "name"
+    "meta"
+    "passthru"
+    "text"
+    "type"
+    "out"
+    "outPath"
+    "drvPath"
+    "outputs"
+    "outputName"
+    "all"
+    "args"
+    "builder"
+    "system"
+    "overrideAttrs"
+    "inputDerivation"
+    "drvAttrs"
+  ];
+
+  # Validate secret names
+  invalidNames = filterAttrs (name: _: builtins.elem name reservedNames) secrets;
+  invalidNamesList = attrNames invalidNames;
+  _ = if invalidNamesList != []
+      then throw "Invalid secret name(s): ${concatStringsSep ", " invalidNamesList}. These names are reserved: ${concatStringsSep ", " reservedNames}"
+      else null;
 
   # Get operation names for display
   operationNames = secret: attrNames secret.__operations;
