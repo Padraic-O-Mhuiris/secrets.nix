@@ -105,12 +105,6 @@
       pkg = null;
     };
 
-  # Generate key setup bash code (for edit/rotate/rekey that use builtin cmd)
-  keySetupCode = resolvedCmd:
-    if resolvedCmd != null
-    then ''export SOPS_AGE_KEY_CMD="${resolvedCmd}"''
-    else "";
-
   # Generate full key resolution code for edit/rotate/rekey operations
   # Includes recipient env var resolution + builtin fallback
   keyResolutionCode = builtinKeyCmd: ''
@@ -953,7 +947,7 @@
     recipientsWithDecrypt = lib.filterAttrs (_: r: r.decryptPkg != null) config.recipients;
     recipientPkgs =
       lib.mapAttrs (
-        recipientName: recipient:
+        _recipientName: recipient:
           mkBuilderPkg mkDecrypt {
             keyCmd = {
               type = "build";

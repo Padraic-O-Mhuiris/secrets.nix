@@ -1,7 +1,7 @@
 # Existing secret tests (requires pkgs + git-tracked fixtures)
 # Uses tests/fixtures/secrets/test-secret which must be git-added
 {ctx}: let
-  inherit (ctx) mkSecrets mkSecretsPackages pkgs fixturesSecretsDir validAgeKey1 validAgeKey2 validAgeKey3;
+  inherit (ctx) mkSecrets mkSecretsPackages pkgs fixturesSecretsDir validAgeKey1;
 in {
   # Basic existence tests
   testExistsIsTrueForGitTrackedFixture = {
