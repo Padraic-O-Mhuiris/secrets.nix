@@ -12,6 +12,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-parts.follows = "flake-parts";
     };
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {flake-parts, ...}: let
@@ -61,9 +65,15 @@
     };
   in
     flake-parts.lib.mkFlake {inherit inputs;} {
+      imports = [inputs.git-hooks.flakeModule];
+
       systems = inputs.nixpkgs.lib.systems.flakeExposed;
 
-      perSystem = {pkgs, ...}: let
+      perSystem = {
+        config,
+        pkgs,
+        ...
+      }: let
         nix-unit = inputs.nix-unit.packages.${pkgs.system}.default;
         testsModule = import ./tests {
           inherit lib pkgs nix-unit;
@@ -71,13 +81,21 @@
           fixturesPath = ./tests/fixtures;
         };
       in {
+        pre-commit.settings.hooks = {
+          alejandra.enable = true;
+          statix.enable = true;
+          deadnix.enable = true;
+        };
+
         devShells.default = pkgs.mkShell {
-          packages = [
-            pkgs.alejandra
-            pkgs.sops
-            pkgs.age
-            nix-unit
-          ];
+          shellHook = config.pre-commit.installationScript;
+          packages =
+            [
+              pkgs.sops
+              pkgs.age
+              nix-unit
+            ]
+            ++ config.pre-commit.settings.enabledPackages;
         };
 
         packages = let
