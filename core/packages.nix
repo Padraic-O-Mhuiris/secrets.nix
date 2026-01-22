@@ -39,9 +39,9 @@
   # Validate secret names
   invalidNames = filterAttrs (name: _: builtins.elem name reservedNames) secrets;
   invalidNamesList = attrNames invalidNames;
-  _ = if invalidNamesList != []
+  validatedSecrets = if invalidNamesList != []
       then throw "Invalid secret name(s): ${concatStringsSep ", " invalidNamesList}. These names are reserved: ${concatStringsSep ", " reservedNames}"
-      else null;
+      else secrets;
 
   # Get operation names for display
   operationNames = secret: attrNames secret.__operations;
@@ -79,12 +79,12 @@
     });
 
   # All secret packages
-  secretPackages = mapAttrs mkSecretPackage secrets;
-  secretNames = attrNames secrets;
+  secretPackages = mapAttrs mkSecretPackage validatedSecrets;
+  secretNames = attrNames validatedSecrets;
 
   # Collect all unique recipients across all secrets
   allRecipients = lib.unique (lib.flatten (
-    lib.mapAttrsToList (_: secret: attrNames secret.recipients) secrets
+    lib.mapAttrsToList (_: secret: attrNames secret.recipients) validatedSecrets
   ));
 
   # Top-level secrets package
