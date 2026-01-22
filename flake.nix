@@ -2,12 +2,16 @@
   description = "Declarative SOPS secrets management with flake-parts";
 
   inputs = {
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nix-unit.url = "github:nix-community/nix-unit";
-    nix-unit.inputs.nixpkgs.follows = "nixpkgs";
-    nix-unit.inputs.flake-parts.follows = "flake-parts";
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+      inputs.nixpkgs-lib.follows = "nixpkgs";
+    };
+    nix-unit = {
+      url = "github:nix-community/nix-unit";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
+    };
   };
 
   outputs = inputs @ {
@@ -88,7 +92,26 @@
           decrypt-api-key = secrets.api-key.decrypt.recipient.alice;
         };
 
-        checks = testsModule.checks;
+        checks =
+          testsModule.checks
+          // {
+            lint-statix = pkgs.runCommand "lint-statix" {
+              nativeBuildInputs = [pkgs.statix];
+              src = ./.;
+            } ''
+              cd $src
+              statix check .
+              touch $out
+            '';
+            lint-deadnix = pkgs.runCommand "lint-deadnix" {
+              nativeBuildInputs = [pkgs.deadnix];
+              src = ./.;
+            } ''
+              cd $src
+              deadnix --fail .
+              touch $out
+            '';
+          };
 
         formatter = pkgs.writeShellApplication {
           name = "fmt";
