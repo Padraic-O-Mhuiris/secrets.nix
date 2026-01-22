@@ -65,14 +65,18 @@
 
       perSystem = {pkgs, ...}: let
         nix-unit = inputs.nix-unit.packages.${pkgs.system}.default;
-        # Shared test expression string for both check and package
-        unitTestExpr = ''(import ${./tests/unit} {lib = import ${pkgs.path}/lib; pkgs = import ${pkgs.path} {system = "${pkgs.system}";}; corePath = ${./core}; fixturesPath = ${./tests/fixtures};})'';
+        testsModule = import ./tests {
+          inherit lib pkgs nix-unit;
+          corePath = ./core;
+          fixturesPath = ./tests/fixtures;
+        };
       in {
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.alejandra
             pkgs.sops
             pkgs.age
+            nix-unit
           ];
         };
 
@@ -80,27 +84,12 @@
           secrets = mkSecretsPackages example pkgs;
         in {
           inherit secrets;
+          inherit (testsModule.packages) unit-tests;
 
           decrypt-api-key = secrets.api-key.decrypt.recipient.alice;
-
-          # Run unit tests: nix run .#unit-tests
-          unit-tests = pkgs.writeShellApplication {
-            name = "unit-tests";
-            runtimeInputs = [nix-unit];
-            text = ''
-              nix-unit --expr '${unitTestExpr}'
-            '';
-          };
         };
 
-        checks.unit-tests =
-          pkgs.runCommand "unit-tests" {
-            nativeBuildInputs = [nix-unit];
-          } ''
-            export HOME=$(mktemp -d)
-            nix-unit --expr '${unitTestExpr}'
-            touch $out
-          '';
+        checks = testsModule.checks;
       };
 
       flake = {
