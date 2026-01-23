@@ -2,6 +2,9 @@
 {lib}: let
   inherit (lib) mkOption types;
 
+  # Import module builders
+  modulesLib = import ./modules.nix {inherit lib;};
+
   # Age public key regex pattern
   ageKeyPattern = "age1[a-z0-9]{58}";
 
@@ -101,6 +104,28 @@
         readOnly = true;
         default = {};
         description = "Package operation functions";
+      };
+
+      # sops-nix module builders
+      mkNixosModule = mkOption {
+        type = types.functionTo types.attrs;
+        readOnly = true;
+        default = modulesLib.mkNixosModule {inherit name; secretCfg = config;};
+        description = "Build a NixOS module fragment for this secret";
+      };
+
+      mkHomeManagerModule = mkOption {
+        type = types.functionTo types.attrs;
+        readOnly = true;
+        default = modulesLib.mkHomeManagerModule {inherit name; secretCfg = config;};
+        description = "Build a Home-Manager module fragment for this secret";
+      };
+
+      mkDarwinModule = mkOption {
+        type = types.functionTo types.attrs;
+        readOnly = true;
+        default = modulesLib.mkDarwinModule {inherit name; secretCfg = config;};
+        description = "Build a Darwin module fragment for this secret";
       };
     };
   };
