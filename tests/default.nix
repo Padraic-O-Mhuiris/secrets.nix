@@ -20,7 +20,7 @@
 }: let
   # Base paths for test expressions
   libExpr = "import ${pkgs.path}/lib";
-  pkgsExpr = "import ${pkgs.path} {system = \"${pkgs.system}\";}";
+  pkgsExpr = "import ${pkgs.path} {system = \"${pkgs.stdenv.hostPlatform.system}\";}";
   coreExpr = "${corePath}";
   fixturesExpr = "${fixturesPath}";
 
