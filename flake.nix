@@ -60,6 +60,7 @@
       api-key = {
         dir = ./secrets;
         inherit recipients;
+        format = "json";
       };
       db-password = {
         dir = ./secrets;

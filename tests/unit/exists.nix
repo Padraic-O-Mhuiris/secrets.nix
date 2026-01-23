@@ -83,7 +83,7 @@ in {
     expected = true;
   };
 
-  testInitNotAvailableForExisting = {
+  testEncryptAvailableForExisting = {
     expr = let
       secrets = mkSecrets {
         test-secret = {
@@ -92,8 +92,8 @@ in {
         };
       };
     in
-      builtins.hasAttr "init" secrets.test-secret.__operations;
-    expected = false;
+      builtins.hasAttr "encrypt" secrets.test-secret.__operations;
+    expected = true;
   };
 
   testAllOperationsForExisting = {
@@ -107,7 +107,7 @@ in {
       ops = builtins.attrNames secrets.test-secret.__operations;
     in
       builtins.sort builtins.lessThan ops;
-    expected = ["decrypt" "edit" "env" "rekey" "rotate"];
+    expected = ["decrypt" "edit" "encrypt" "env" "rekey" "rotate"];
   };
 
   # Derivation tests

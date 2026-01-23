@@ -18,7 +18,8 @@ in {
     expected = true;
   };
 
-  testInitAvailableForNonexistent = {
+  # Always available operations (encrypt, edit, env)
+  testEncryptAlwaysAvailable = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -27,7 +28,20 @@ in {
         };
       };
     in
-      builtins.hasAttr "init" secrets.test.__operations;
+      builtins.hasAttr "encrypt" secrets.test.__operations;
+    expected = true;
+  };
+
+  testEditAlwaysAvailable = {
+    expr = let
+      secrets = mkSecrets {
+        test = {
+          dir = nonexistentDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+    in
+      builtins.hasAttr "edit" secrets.test.__operations;
     expected = true;
   };
 
@@ -44,6 +58,7 @@ in {
     expected = true;
   };
 
+  # Operations only available when secret exists
   testDecryptNotAvailableForNonexistent = {
     expr = let
       secrets = mkSecrets {
@@ -54,19 +69,6 @@ in {
       };
     in
       builtins.hasAttr "decrypt" secrets.test.__operations;
-    expected = false;
-  };
-
-  testEditNotAvailableForNonexistent = {
-    expr = let
-      secrets = mkSecrets {
-        test = {
-          dir = nonexistentDir;
-          recipients.alice = {key = validAgeKey1;};
-        };
-      };
-    in
-      builtins.hasAttr "edit" secrets.test.__operations;
     expected = false;
   };
 
@@ -96,7 +98,8 @@ in {
     expected = false;
   };
 
-  testInitIsFunctor = {
+  # Functor tests
+  testEncryptIsFunctor = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -104,7 +107,21 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      op = secrets.test.__operations.init;
+      op = secrets.test.__operations.encrypt;
+    in
+      builtins.isAttrs op && op ? __functor;
+    expected = true;
+  };
+
+  testEditIsFunctor = {
+    expr = let
+      secrets = mkSecrets {
+        test = {
+          dir = nonexistentDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      op = secrets.test.__operations.edit;
     in
       builtins.isAttrs op && op ? __functor;
     expected = true;
@@ -124,7 +141,7 @@ in {
     expected = true;
   };
 
-  testOnlyInitAndEnvForNonexistent = {
+  testAlwaysAvailableOpsForNonexistent = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -135,7 +152,7 @@ in {
       ops = builtins.attrNames secrets.test.__operations;
     in
       builtins.sort builtins.lessThan ops;
-    expected = ["env" "init"];
+    expected = ["edit" "encrypt" "env"];
   };
 
   # Multiple secrets tests
