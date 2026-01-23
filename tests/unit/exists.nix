@@ -325,6 +325,152 @@ in {
     };
   };
 
+  # Rotate operation tests
+  testRotateDerivationIsShellApplication = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      drv = secrets.test-secret.__operations.rotate pkgs;
+    in
+      drv ? meta && drv.meta ? mainProgram;
+    expected = true;
+  };
+
+  testRotateMainProgramMatchesName = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      drv = secrets.test-secret.__operations.rotate pkgs;
+    in
+      drv.meta.mainProgram;
+    expected = "rotate-test-secret";
+  };
+
+  testRotateWithBuilderKeyCmd = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      drv = secrets.test-secret.__operations.rotate pkgs;
+      configured = drv.withSopsAgeKeyCmd "echo test-key";
+    in
+      configured ? name && configured ? drvPath;
+    expected = true;
+  };
+
+  testRotateWithBuilderKeyCmdPreservesName = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      drv = secrets.test-secret.__operations.rotate pkgs;
+      configured = drv.withSopsAgeKeyCmd "echo test-key";
+    in
+      configured.name;
+    expected = "rotate-test-secret";
+  };
+
+  testRotateChainedPreservesMethods = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      drv = secrets.test-secret.__operations.rotate pkgs;
+      configured = drv.withSopsAgeKeyCmd "echo test-key";
+    in {
+      hasWithCmd = configured ? withSopsAgeKeyCmd;
+      hasWithPkg = configured ? withSopsAgeKeyCmdPkg;
+      hasBuild = configured ? buildSopsAgeKeyCmdPkg;
+    };
+    expected = {
+      hasWithCmd = true;
+      hasWithPkg = true;
+      hasBuild = true;
+    };
+  };
+
+  testRotateAvailableInPackagesPassthru = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      pkg = mkSecretsPackages secrets pkgs;
+    in
+      pkg.test-secret ? rotate;
+    expected = true;
+  };
+
+  testRotateRecipientAvailableWithDecryptPkg = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {
+            key = validAgeKey1;
+            decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" "echo test";
+          };
+        };
+      };
+      pkg = mkSecretsPackages secrets pkgs;
+    in
+      pkg.test-secret.rotate ? recipient && pkg.test-secret.rotate.recipient ? alice;
+    expected = true;
+  };
+
+  testRotateRecipientAliceIsDerivation = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {
+            key = validAgeKey1;
+            decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" "echo test";
+          };
+        };
+      };
+      pkg = mkSecretsPackages secrets pkgs;
+    in
+      pkg.test-secret.rotate.recipient.alice ? name && pkg.test-secret.rotate.recipient.alice ? drvPath;
+    expected = true;
+  };
+
+  testRotateRecipientHasCorrectName = {
+    expr = let
+      secrets = mkSecrets {
+        test-secret = {
+          dir = fixturesSecretsDir;
+          recipients.alice = {
+            key = validAgeKey1;
+            decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" "echo test";
+          };
+        };
+      };
+      pkg = mkSecretsPackages secrets pkgs;
+    in
+      pkg.test-secret.rotate.recipient.alice.name;
+    expected = "rotate-test-secret";
+  };
+
   # mkSecretsPackages with existing secrets
   testPackagesDecryptAvailableInPassthru = {
     expr = let
