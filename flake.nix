@@ -39,6 +39,14 @@
           '';
       };
 
+      charlie = {
+        key = "age1ekvz0sv77x98lmfyp7208qel42hh5e0a539yeu8vahqhf499se9sdhtw0q";
+        decryptPkg = pkgs:
+          pkgs.writeShellScriptBin "get-charlie-key" ''
+            echo "AGE-SECRET-KEY-1W2V7CW8L8J8K3L3WANE9M6C20FXGHSX5DA7MA0JKZR24CP0MAAHQCGCAVZ"
+          '';
+      };
+
       server1 = {
         key = "age1jmxpfw8y5e5njm5fq08n65ceu7vuydx5l8wxk7hyu9s3x5qs93ysxqrd8l";
         decryptPkg = pkgs:

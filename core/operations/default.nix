@@ -3,8 +3,8 @@
 # Implements the secret-api.md specification:
 # - decrypt: outputs secret to stdout
 # - edit: decrypt -> $EDITOR -> re-encrypt
-# - rotate: decrypt -> new content -> re-encrypt
-# - rekey: decrypt -> re-encrypt (same content, updated recipients)
+# - rotate: rotates data encryption key (sops rotate), content unchanged
+# - rekey: updates recipients to match config (sops updatekeys), data key unchanged
 # - init: create new encrypted secret (no decryption needed)
 #
 # All decrypt-dependent operations share the same builder pattern:
@@ -844,40 +844,205 @@
 
   # ============================================================================
   # REKEY OPERATION
-  # Decrypts secret, re-encrypts with current recipients. Content unchanged.
-  # Outputs to current directory with filename only.
+  # Updates master keys (recipients) to match current config using sops updatekeys.
+  # Data key unchanged, content unchanged. Only recipient list is updated.
   # ============================================================================
   mkRekey = {keyCmd ? null}: pkgs: let
     resolved = resolveKeyCmd pkgs keyCmd;
+    builtinKeyCmd =
+      if resolved.cmd != null
+      then "\"${resolved.cmd}\""
+      else "";
+    # Generate recipient env var examples for help text
+    recipientEnvExamples = lib.concatMapStringsSep "\n    " (rName: let
+      envName = toEnvVar rName;
+    in ''
+      ${secretEnvName}__${envName}__AGE_KEY_CMD   Secret-specific for ${rName}
+          ${envName}__AGE_KEY_CMD                 All secrets for ${rName}'')
+    recipientNamesList;
   in
     pkgs.writeShellApplication {
       name = "rekey-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
-        ${sopsConfigSetup}
-        ${keyResolutionCode resolved.cmd}
+                ${sopsConfigSetup}
+                ${recipientEnvVarResolution}
 
-        if [[ ! -f "${storePath}" ]]; then
-          echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
-          exit 1
-        fi
+                EXPECTED_FILENAME="${fileName}"
+                DEFAULT_OUTPUT_PATH="${projectOutPath}"
+                SECRET_PATH="${storePath}"
+                OUTPUT_ARG=""
+                BUILTIN_KEY_CMD=${builtinKeyCmd}
 
-        OUTPUT_PATH="./${fileName}"
+                show_help() {
+                  cat <<'HELP'
+        rekey-${name} - Update recipients for a secret
 
-        # Decrypt from store
-        DECRYPTED=$(sops --config <(echo "$SOPS_CONFIG") \
-             --input-type ${sopsFormat} --output-type ${sopsFormat} \
-             -d "${storePath}")
+        USAGE
+            rekey-${name} [OPTIONS]
 
-        # Re-encrypt with current recipients
-        if echo -n "$DECRYPTED" | sops --config <(echo "$SOPS_CONFIG") \
-             --input-type ${sopsFormat} --output-type ${sopsFormat} \
-             -e /dev/stdin > "$OUTPUT_PATH"; then
-          echo "Rekeyed: $OUTPUT_PATH" >&2
-        else
-          echo "Error: Failed to re-encrypt secret" >&2
-          exit 1
-        fi
+        DESCRIPTION
+            Updates the master keys (recipients) for the SOPS-encrypted secret '${name}'
+            to match the current flake configuration.
+
+            Uses 'sops updatekeys' to add/remove recipients without changing the data key.
+            The secret content and data encryption key remain unchanged.
+
+            Use this after modifying the recipients list in your flake configuration
+            to grant or revoke access to the secret.
+
+        OPTIONS
+            --output <path>   Override output location. Can be:
+                              - A directory (appends expected filename)
+                              - A full file path (must match filename: ${fileName})
+                              Default: ${projectOutPath}
+
+            --sopsAgeKey <key>
+                              Use this age secret key directly for decryption.
+                              WARNING: Visible in process list. Prefer --sopsAgeKeyCmd.
+
+            --sopsAgeKeyFile <path>
+                              Read age secret key from this file.
+
+            --sopsAgeKeyCmd <cmd>
+                              Run this command to get the age secret key.
+
+            -h, --help        Show this help message.
+
+        EXAMPLES
+            # Update recipients, output to project path
+            rekey-${name}
+
+            # Rekey with specific key command
+            rekey-${name} --sopsAgeKeyCmd "pass show age-key"
+
+            # Override output directory
+            rekey-${name} --output ./secrets/
+
+        ENVIRONMENT
+            Recipient-specific env vars (for this secret's recipients):
+            ${recipientEnvExamples}
+
+            Global env vars:
+            SOPS_AGE_KEY          Age secret key (direct value)
+            SOPS_AGE_KEY_FILE     Path to age secret key file
+            SOPS_AGE_KEY_CMD      Command to retrieve age secret key
+
+        RECIPIENTS (current config)
+            ${builtins.concatStringsSep ", " recipientNamesList}
+
+        NOTES
+            - Format: ${sopsFormat}
+            - Source: ${storePath}
+        HELP
+                }
+
+                # Parse arguments
+                while [[ $# -gt 0 ]]; do
+                  case "$1" in
+                    -h|--help)
+                      show_help
+                      exit 0
+                      ;;
+                    --output)
+                      OUTPUT_ARG="$2"
+                      shift 2
+                      ;;
+                    --output=*)
+                      OUTPUT_ARG="''${1#*=}"
+                      shift
+                      ;;
+                    --sopsAgeKey)
+                      export SOPS_AGE_KEY="$2"
+                      shift 2
+                      ;;
+                    --sopsAgeKey=*)
+                      export SOPS_AGE_KEY="''${1#*=}"
+                      shift
+                      ;;
+                    --sopsAgeKeyFile)
+                      export SOPS_AGE_KEY_FILE="$2"
+                      shift 2
+                      ;;
+                    --sopsAgeKeyFile=*)
+                      export SOPS_AGE_KEY_FILE="''${1#*=}"
+                      shift
+                      ;;
+                    --sopsAgeKeyCmd)
+                      export SOPS_AGE_KEY_CMD="$2"
+                      shift 2
+                      ;;
+                    --sopsAgeKeyCmd=*)
+                      export SOPS_AGE_KEY_CMD="''${1#*=}"
+                      shift
+                      ;;
+                    *)
+                      echo "Error: Unknown argument: $1" >&2
+                      echo "Run with --help for usage information." >&2
+                      exit 1
+                      ;;
+                  esac
+                done
+
+                # Verify secret exists
+                if [[ ! -f "$SECRET_PATH" ]]; then
+                  echo "Error: Secret '${name}' does not exist at $SECRET_PATH" >&2
+                  echo "Use init to create a new secret." >&2
+                  exit 1
+                fi
+
+                # Key resolution
+                if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
+                  if ! resolve_recipient_key; then
+                    if [[ -n "$BUILTIN_KEY_CMD" ]]; then
+                      export SOPS_AGE_KEY_CMD="$BUILTIN_KEY_CMD"
+                    fi
+                  fi
+                fi
+
+                # Determine output path
+                if [[ -n "$OUTPUT_ARG" ]]; then
+                  if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
+                    OUTPUT_PATH="''${OUTPUT_ARG%/}/$EXPECTED_FILENAME"
+                  else
+                    GIVEN_FILENAME=$(basename "$OUTPUT_ARG")
+                    if [[ "$GIVEN_FILENAME" != "$EXPECTED_FILENAME" ]]; then
+                      echo "Error: Filename mismatch." >&2
+                      echo "  Expected: $EXPECTED_FILENAME" >&2
+                      echo "  Given:    $GIVEN_FILENAME" >&2
+                      echo "Hint: Use a directory path instead: --output $(dirname "$OUTPUT_ARG")/" >&2
+                      exit 1
+                    fi
+                    OUTPUT_PATH="$OUTPUT_ARG"
+                  fi
+                else
+                  OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
+                fi
+
+                # Validation for file output
+                OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+                if [[ ! -d "$OUTPUT_DIR" ]]; then
+                  echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
+                  exit 1
+                fi
+
+                # Copy secret to output path first, then updatekeys in place
+                cp "$SECRET_PATH" "$OUTPUT_PATH"
+
+                # updatekeys needs a real file for config (not process substitution)
+                SOPS_CONFIG_FILE=$(mktemp)
+                trap 'rm -f "$SOPS_CONFIG_FILE"' EXIT
+                echo "$SOPS_CONFIG" > "$SOPS_CONFIG_FILE"
+
+                if sops --config "$SOPS_CONFIG_FILE" \
+                     --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                     updatekeys -y "$OUTPUT_PATH"; then
+                  echo "Rekeyed: $OUTPUT_PATH" >&2
+                else
+                  rm -f "$OUTPUT_PATH"
+                  echo "Error: Failed to rekey secret" >&2
+                  exit 1
+                fi
       '';
     };
 
@@ -1131,7 +1296,30 @@
         };
     });
 
-  rekeyPkg = pkgs: mkBuilderPkg mkRekey {keyCmd = null;} pkgs;
+  rekeyPkg = pkgs: let
+    basePkg = mkBuilderPkg mkRekey {keyCmd = null;} pkgs;
+    # Build recipient-specific rekey packages for those with decryptPkg
+    recipientsWithDecrypt = lib.filterAttrs (_: r: r.decryptPkg != null) config.recipients;
+    recipientPkgs =
+      lib.mapAttrs (
+        _recipientName: recipient:
+          mkBuilderPkg mkRekey {
+            keyCmd = {
+              type = "build";
+              value = recipient.decryptPkg;
+            };
+          }
+          pkgs
+      )
+      recipientsWithDecrypt;
+  in
+    basePkg.overrideAttrs (old: {
+      passthru =
+        (old.passthru or {})
+        // {
+          recipient = recipientPkgs;
+        };
+    });
 
   # Conditional operation options based on whether secret exists
   # When secret exists: decrypt, edit, rotate, rekey available
