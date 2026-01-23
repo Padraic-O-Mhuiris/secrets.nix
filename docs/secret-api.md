@@ -45,126 +45,118 @@ Operations are conditionally available based on whether the secret file exists:
 
 | When `_exists` is... | Available Operations |
 |----------------------|----------------------|
-| `false` | `init` only |
-| `true` | `decrypt`, `edit`, `rotate`, `rekey` |
+| `false` | `encrypt`, `edit` (no decrypt), `env` |
+| `true` | `encrypt`, `edit` (with decrypt), `decrypt`, `rotate`, `rekey`, `env` |
 
 ### Overview
 
-| Operation | Input Source | Output | Needs Private Key? |
-|-----------|--------------|--------|-------------------|
-| `decrypt` | `_path` | stdout | Yes |
-| `edit` | `_path` | `./<_fileName>` | Yes |
-| `rotate` | `_path` + new content | `./<_fileName>` | Yes |
-| `rekey` | `_path` | `./<_fileName>` | Yes |
-| `init` | new content | `./<_fileName>` | No |
+| Operation | Description | Needs Private Key? |
+|-----------|-------------|-------------------|
+| `encrypt` | Encrypts content from `--input` | No |
+| `edit` | Interactive editor (empty if new, decrypts if exists) | Only if exists |
+| `decrypt` | Outputs secret to stdout | Yes |
+| `rotate` | Rotates data encryption key (`sops rotate`) | Yes |
+| `rekey` | Updates recipients (`sops updatekeys`) | Yes |
+| `env` | Outputs env var template | No |
 
-All write operations output to the **current directory** with the derived filename. The user is responsible for moving the file to the correct location (`dir`) and committing to git.
+All write operations output to the configured project path by default, overridable with `--output`.
+
+### encrypt
+
+Encrypts content from `--input` to a secret file. Always available regardless of whether secret exists.
+
+```bash
+# From file
+nix run .#secrets.my-secret.encrypt -- --input ./plaintext.txt
+
+# From process substitution (secure - content not in shell history)
+nix run .#secrets.my-secret.encrypt -- --input <(pass show my-secret)
+
+# Override output location
+nix run .#secrets.my-secret.encrypt -- --input ./secret.txt --output ./other-dir/
+
+# Print to stdout
+nix run .#secrets.my-secret.encrypt -- --input ./secret.txt --output /dev/stdout
+```
+
+- **Input**: Content from `--input` flag (required)
+- **Output**: Encrypted file at project path (default) or `--output` location
+- **Requires**: Only public keys (recipients)
+
+### edit
+
+Interactive editor for secrets. Behavior depends on whether secret exists:
+
+**When secret doesn't exist:**
+```bash
+# Opens $EDITOR with empty content
+nix run .#secrets.new-secret.edit
+```
+- No decryption needed
+- No builder pattern available
+
+**When secret exists:**
+```bash
+# Decrypts, opens $EDITOR, re-encrypts
+nix run .#secrets.my-secret.edit.recipient.alice
+
+# With runtime key override
+nix run .#secrets.my-secret.edit -- --sopsAgeKeyCmd "pass show age-key"
+```
+- Full decrypt flow with builder pattern
+- Supports `.recipient.<name>` packages
 
 ### decrypt
 
-Decrypts the secret and outputs to stdout.
+Decrypts the secret and outputs to stdout. Only available when secret exists.
 
 ```bash
 # Basic usage
-nix run .#secrets.my-secret.decrypt
+nix run .#secrets.my-secret.decrypt.recipient.alice
 
 # With key command
-nix run .#secrets.my-secret.decrypt.withSopsAgeKeyCmd "op read op://vault/age-key"
+nix run .#secrets.my-secret.decrypt -- --sopsAgeKeyCmd "op read op://vault/age-key"
+
+# To file
+nix run .#secrets.my-secret.decrypt.recipient.alice -- --output ./plaintext.txt
 ```
 
 - **Input**: Encrypted file from `_path`
 - **Output**: Decrypted content to stdout, piped through format-specific tool (jq/yq)
 - **Requires**: Private key access
 
-### edit
-
-Decrypts the secret, opens in `$EDITOR`, and re-encrypts.
-
-```bash
-# Opens editor, saves to ./my-secret.json in current directory
-nix run .#secrets.my-secret.edit
-```
-
-- **Input**: Encrypted file from `_path`
-- **Output**: Re-encrypted file at `./<_fileName>`
-- **Requires**: Private key access, `$EDITOR`
-
 ### rotate
 
-Accepts new content and encrypts.
+Rotates the data encryption key using `sops rotate`. Content remains unchanged. Only available when secret exists.
 
 ```bash
-# From stdin
-echo '{"key": "new-value"}' | nix run .#secrets.my-secret.rotate
+# Rotate data key
+nix run .#secrets.my-secret.rotate.recipient.alice
 
-# From argument
-nix run .#secrets.my-secret.rotate '{"key": "new-value"}'
-
-# From file
-nix run .#secrets.my-secret.rotate ./new-content.json
+# Override output
+nix run .#secrets.my-secret.rotate.recipient.alice -- --output ./secrets/
 ```
 
-- **Input**: Encrypted file from `_path` + new content (stdin/arg/file)
-- **Output**: Re-encrypted file at `./<_fileName>`
+Use case: Periodic key rotation for security compliance, or after a suspected key compromise.
+
+- **Input**: Encrypted file from `_path`
+- **Output**: Re-encrypted file with new data key
 - **Requires**: Private key access
 
 ### rekey
 
-Decrypts the secret and re-encrypts with the current recipient configuration. Content unchanged.
+Updates recipients to match the current flake configuration using `sops updatekeys`. Data key and content unchanged. Only available when secret exists.
 
 ```bash
-# Re-encrypts with current recipients
-nix run .#secrets.my-secret.rekey
+# Update recipients
+nix run .#secrets.my-secret.rekey.recipient.alice
 ```
 
-Use case: Recipients have changed in the nix configuration, and you need to update the encrypted file to reflect the new access list.
+Use case: After adding or removing recipients in your flake configuration.
 
 - **Input**: Encrypted file from `_path`
-- **Output**: Re-encrypted file at `./<_fileName>` with updated recipients
+- **Output**: Re-encrypted file with updated recipient list
 - **Requires**: Private key access
-
-### init
-
-Creates a new encrypted secret. Does not require decryption. Only available when the secret file doesn't exist yet.
-
-```bash
-# Preview encrypted output (no file created)
-nix run .#secrets.my-secret.init -- '{"key": "value"}'
-
-# Write to file
-nix run .#secrets.my-secret.init -- --outpath ./secrets/ '{"key": "value"}'
-
-# Opens $EDITOR if run directly with TTY (not via nix run)
-./result/bin/secret-init-my-secret
-./result/bin/secret-init-my-secret --outpath ./secrets/
-
-# Can also specify full path (filename must match)
-nix run .#secrets.my-secret.init -- --outpath ./secrets/my-secret.json '{"key": "value"}'
-```
-
-- **Input**: Content as positional argument, or opens `$EDITOR` (via sops) if run with TTY
-- **Output**: Stdout by default, or file at `<outpath>/<_fileName>` if `--outpath` specified
-- **Requires**: Only public keys (recipients)
-
-Options:
-- `--outpath` - Output directory or file path. If not specified, outputs to stdout.
-
-The `--outpath` argument can be:
-- A directory (e.g., `./secrets/`) - filename is derived automatically
-- A full path (e.g., `./secrets/my-secret.json`) - filename must match `_fileName`
-
-Note: `$EDITOR` mode requires a TTY, so it only works when running the command directly (not via `nix run`). Build and run directly for editor support:
-
-```bash
-nix build .#secrets.my-secret.init && ./result/bin/secret-init-my-secret --outpath ./secrets/
-```
-
-```bash
-# Create and commit a new secret
-nix run .#secrets.my-secret.init -- --outpath ./secrets/ '{"key": "value"}'
-git add secrets/my-secret.json
-git commit -m "add my-secret"
-```
 
 ## Key Configuration Builders
 
@@ -225,19 +217,21 @@ All decrypt-dependent operations read from `_path` (which becomes a nix store pa
 
 ### Output (Encryption Target)
 
-All write operations output to the current directory with the derived filename (`./<_fileName>`).
-
-The user workflow is:
-1. Run the operation (outputs to current directory)
-2. Move the file to the correct location (`dir`)
-3. Commit to git
+All write operations output to the project path by default (derived from `dir` + `_fileName`), overridable with `--output`.
 
 ```bash
-# Example: create and commit a new secret
-echo '{"key": "value"}' | nix run .#secrets.my-secret.init
-mv my-secret.json secrets/
-git add secrets/my-secret.json
-git commit -m "add my-secret"
+# Default: outputs to project path
+nix run .#secrets.my-secret.encrypt -- --input ./secret.txt
+# -> writes to ./secrets/my-secret.json
+
+# Override output directory
+nix run .#secrets.my-secret.encrypt -- --input ./secret.txt --output ./other/
+
+# Override full path (filename must match)
+nix run .#secrets.my-secret.encrypt -- --input ./secret.txt --output ./other/my-secret.json
+
+# Output to stdout
+nix run .#secrets.my-secret.encrypt -- --input ./secret.txt --output /dev/stdout
 ```
 
 ## Decryption Strategy for Mutating Operations
@@ -332,21 +326,20 @@ The encrypted file in the nix store is safe:
 ### Development Workflow
 
 ```bash
-# Create a new secret (only available when secret doesn't exist)
-nix run .#secrets.api-key.init -- --outpath ./secrets/ '{"api_key": "secret123"}'
+# Create a new secret interactively
+nix run .#secrets.api-key.edit
 git add secrets/api-key.json
 
-# Or use editor for content
-nix run .#secrets.api-key.init -- --outpath ./secrets/
+# Or from a file/command
+nix run .#secrets.api-key.encrypt -- --input <(pass show my-api-key)
 git add secrets/api-key.json
 
 # Edit an existing secret
-nix run .#secrets.api-key.edit
-mv api-key.json secrets/
+nix run .#secrets.api-key.edit.recipient.alice
 git add secrets/api-key.json
 
 # Decrypt for use in scripts
-API_KEY=$(nix run .#secrets.api-key.decrypt | jq -r .api_key)
+API_KEY=$(nix run .#secrets.api-key.decrypt.recipient.alice | jq -r .api_key)
 ```
 
 ### CI/CD
@@ -366,18 +359,25 @@ packages.deploy = pkgs.writeShellApplication {
 
 ```bash
 # After updating recipients in nix config:
-nix run .#secrets.api-key.rekey
-mv api-key.json secrets/
+nix run .#secrets.api-key.rekey.recipient.alice
 git add secrets/api-key.json
 git commit -m "rekey api-key with updated recipients"
 ```
 
-### Rotating Secret Values
+### Rotating Data Keys
 
 ```bash
-# Generate new secret and rotate
-NEW_KEY=$(openssl rand -hex 32)
-echo "{\"api_key\": \"$NEW_KEY\"}" | nix run .#secrets.api-key.rotate
-mv api-key.json secrets/
+# Rotate the data encryption key (content unchanged)
+nix run .#secrets.api-key.rotate.recipient.alice
 git add secrets/api-key.json
+git commit -m "rotate api-key data key"
+```
+
+### Replacing Secret Values
+
+```bash
+# Replace with new content using encrypt
+nix run .#secrets.api-key.encrypt -- --input <(echo '{"api_key": "new-value"}')
+git add secrets/api-key.json
+git commit -m "update api-key value"
 ```

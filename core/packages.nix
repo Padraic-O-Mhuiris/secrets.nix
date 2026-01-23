@@ -3,12 +3,12 @@
 # Structure:
 #   secrets                         # Top-level package (lists all secrets)
 #   secrets.<name>                  # Secret info package
-#   secrets.<name>.decrypt          # Decrypt operation
-#   secrets.<name>.edit             # Edit operation
-#   secrets.<name>.rotate           # Rotate operation
-#   secrets.<name>.rekey            # Rekey operation
-#   secrets.<name>.init             # Init operation
-#   secrets.<name>.env              # Env var template output
+#   secrets.<name>.encrypt          # Encrypt operation (always)
+#   secrets.<name>.edit             # Edit operation (always, decrypt only if exists)
+#   secrets.<name>.env              # Env var template output (always)
+#   secrets.<name>.decrypt          # Decrypt operation (only if exists)
+#   secrets.<name>.rotate           # Rotate operation (only if exists)
+#   secrets.<name>.rekey            # Rekey operation (only if exists)
 #
 {lib}: secrets: pkgs: let
   inherit (lib) mapAttrs attrNames concatStringsSep filterAttrs;
@@ -105,11 +105,11 @@
       echo ""
       echo "Usage:"
       echo "  nix run .#secrets.<name>              Show secret info"
-      echo "  nix run .#secrets.<name>.init         Create new secret"
-      echo "  nix run .#secrets.<name>.decrypt      Decrypt to stdout"
-      echo "  nix run .#secrets.<name>.edit         Edit secret"
-      echo "  nix run .#secrets.<name>.rotate       Rotate secret value"
-      echo "  nix run .#secrets.<name>.rekey        Re-encrypt with current recipients"
+      echo "  nix run .#secrets.<name>.encrypt      Encrypt content from --input"
+      echo "  nix run .#secrets.<name>.edit         Edit secret interactively"
+      echo "  nix run .#secrets.<name>.decrypt      Decrypt to stdout (if exists)"
+      echo "  nix run .#secrets.<name>.rotate       Rotate data key (if exists)"
+      echo "  nix run .#secrets.<name>.rekey        Update recipients (if exists)"
       echo "  nix run .#secrets.<name>.env          Output env var template"
     '';
   };

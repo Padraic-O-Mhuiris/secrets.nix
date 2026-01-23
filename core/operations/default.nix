@@ -1,16 +1,22 @@
 # Secret operations module
 #
-# Implements the secret-api.md specification:
+# Operations (availability depends on whether secret exists):
+#
+# ALWAYS AVAILABLE:
+# - encrypt: encrypts content from --input (no decryption needed)
+# - edit: interactive editor (empty if new, decrypts if exists)
+# - env: outputs env var template for key configuration
+#
+# ONLY WHEN SECRET EXISTS:
 # - decrypt: outputs secret to stdout
-# - edit: decrypt -> $EDITOR -> re-encrypt
 # - rotate: rotates data encryption key (sops rotate), content unchanged
 # - rekey: updates recipients to match config (sops updatekeys), data key unchanged
-# - init: create new encrypted secret (no decryption needed)
 #
-# All decrypt-dependent operations share the same builder pattern:
+# Decrypt-dependent operations support the builder pattern:
 # - .withSopsAgeKeyCmd "command"
 # - .withSopsAgeKeyCmdPkg drv
 # - .buildSopsAgeKeyCmdPkg (pkgs: drv)
+# - .recipient.<name> (for recipients with decryptPkg configured)
 #
 {
   lib,
@@ -104,23 +110,6 @@
       cmd = null;
       pkg = null;
     };
-
-  # Generate full key resolution code for edit/rotate/rekey operations
-  # Includes recipient env var resolution + builtin fallback
-  keyResolutionCode = builtinKeyCmd: ''
-    ${recipientEnvVarResolution}
-
-    # Key resolution: check recipient env vars first, then builtin
-    if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
-      if ! resolve_recipient_key; then
-        ${
-      if builtinKeyCmd != null
-      then ''export SOPS_AGE_KEY_CMD="${builtinKeyCmd}"''
-      else ":  # No builtin key command configured"
-    }
-      fi
-    fi
-  '';
 
   # Generate bash code for recipient-based env var resolution
   # Checks: <SECRET>__<RECIPIENT>__AGE_KEY* then <RECIPIENT>__AGE_KEY* for each recipient
@@ -253,14 +242,14 @@
   '';
 
   # ============================================================================
-  # INIT OPERATION
-  # Creates a new encrypted secret. Does not require decryption.
-  # Requires --outpath flag for output location.
-  # Content from stdin, positional arg, or $EDITOR (via sops) if neither.
+  # ENCRYPT OPERATION
+  # Encrypts content to a secret file. Does not require decryption.
+  # Always available regardless of whether secret exists.
+  # Requires --input flag.
   # ============================================================================
-  mkInit = pkgs:
+  mkEncrypt = pkgs:
     pkgs.writeShellApplication {
-      name = "init-${name}";
+      name = "encrypt-${name}";
       runtimeInputs = [pkgs.sops];
       text = ''
                 ${sopsConfigSetup}
@@ -272,20 +261,20 @@
 
                 show_help() {
                   cat <<'HELP'
-        init-${name} - Create a new encrypted secret
+        encrypt-${name} - Encrypt content to a secret file
 
         USAGE
-            init-${name} [OPTIONS]
+            encrypt-${name} --input <path> [OPTIONS]
 
         DESCRIPTION
-            Creates a new SOPS-encrypted secret file for '${name}'.
+            Encrypts plaintext content to a SOPS-encrypted secret file for '${name}'.
 
-            Without --input, opens $EDITOR to compose the secret interactively.
+            The --input flag is required. Use 'edit' for interactive editing.
             The secret is encrypted using age keys defined in the flake configuration.
 
         OPTIONS
-            --input <path>    Read plaintext content from file or process substitution.
-                              Supports /dev/fd paths for secure secret passing.
+            --input <path>    (Required) Read plaintext content from file or process
+                              substitution. Supports /dev/fd paths for secure secret passing.
 
             --output <path>   Override output location. Can be:
                               - A directory (appends expected filename)
@@ -296,26 +285,23 @@
             -h, --help        Show this help message.
 
         EXAMPLES
-            # Interactive: open $EDITOR to enter secret
-            init-${name}
-
             # From file
-            init-${name} --input ./plaintext-secret.txt
+            encrypt-${name} --input ./plaintext-secret.txt
 
             # Secure: use process substitution (content never in shell history/ps)
-            init-${name} --input <(cat ./plaintext-secret.txt)
-            init-${name} --input <(pass show my-secret)
-            init-${name} --input <(vault kv get -field=value secret/foo)
+            encrypt-${name} --input <(cat ./plaintext-secret.txt)
+            encrypt-${name} --input <(pass show my-secret)
+            encrypt-${name} --input <(vault kv get -field=value secret/foo)
 
             # Override output directory
-            init-${name} --output ./secrets/
+            encrypt-${name} --input ./secret.txt --output ./secrets/
 
             # Print encrypted output to screen (for inspection/piping)
-            init-${name} --input ./secret.txt --output /dev/stdout
+            encrypt-${name} --input ./secret.txt --output /dev/stdout
 
         NOTES
             - The output directory must already exist
-            - Fails if the secret file already exists (use edit/rotate instead)
+            - Will overwrite existing secret file
             - Format: ${sopsFormat}
             - Recipients: ${builtins.concatStringsSep ", " (builtins.attrNames config.recipients)}
         HELP
@@ -352,6 +338,13 @@
                   esac
                 done
 
+                # Require --input
+                if [[ -z "$INPUT_FILE" ]]; then
+                  echo "Error: --input is required" >&2
+                  echo "Run with --help for usage information." >&2
+                  exit 1
+                fi
+
                 # Determine output path (default to project path)
                 if [[ "$OUTPUT_ARG" == "/dev/stdout" ]]; then
                   OUTPUT_PATH="/dev/stdout"
@@ -379,12 +372,6 @@
 
                 # Validation for file output (skip for stdout)
                 if [[ "$OUTPUT_PATH" != "/dev/stdout" ]]; then
-                  # Check if file already exists
-                  if [[ -f "$OUTPUT_PATH" ]]; then
-                    echo "Error: Secret file already exists: $OUTPUT_PATH" >&2
-                    exit 1
-                  fi
-
                   # Check parent directory exists
                   OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
                   if [[ ! -d "$OUTPUT_DIR" ]]; then
@@ -394,28 +381,14 @@
                 fi
 
                 # Encrypt and write
-                if [[ -n "$INPUT_FILE" ]]; then
-                  # Read content from file (supports process substitution)
-                  if sops --config <(echo "$SOPS_CONFIG") \
-                       --input-type ${sopsFormat} --output-type ${sopsFormat} \
-                       -e "$INPUT_FILE" > "$OUTPUT_PATH"; then
-                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
-                  else
-                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-                    echo "Error: Failed to encrypt secret" >&2
-                    exit 1
-                  fi
+                if sops --config <(echo "$SOPS_CONFIG") \
+                     --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                     -e "$INPUT_FILE" > "$OUTPUT_PATH"; then
+                  [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Encrypted: $OUTPUT_PATH" >&2
                 else
-                  # Use editor
-                  if sops --config <(echo "$SOPS_CONFIG") \
-                       --input-type ${sopsFormat} --output-type ${sopsFormat} \
-                       "$OUTPUT_PATH"; then
-                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && echo "Created: $OUTPUT_PATH" >&2
-                  else
-                    [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
-                    echo "Error: Failed to create secret" >&2
-                    exit 1
-                  fi
+                  [[ "$OUTPUT_PATH" != "/dev/stdout" ]] && [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+                  echo "Error: Failed to encrypt secret" >&2
+                  exit 1
                 fi
       '';
     };
@@ -603,47 +576,322 @@
       };
 
   # ============================================================================
-  # EDIT OPERATION
-  # Decrypts secret, opens in $EDITOR, re-encrypts to local file.
-  # Outputs to current directory with filename only.
+  # EDIT OPERATION (NEW SECRET)
+  # Opens $EDITOR with empty content, encrypts result.
+  # No decryption needed - for secrets that don't exist yet.
   # ============================================================================
-  mkEdit = {keyCmd ? null}: pkgs: let
+  mkEditNew = pkgs:
+    pkgs.writeShellApplication {
+      name = "edit-${name}";
+      runtimeInputs = [pkgs.sops];
+      text = ''
+                ${sopsConfigSetup}
+
+                EXPECTED_FILENAME="${fileName}"
+                DEFAULT_OUTPUT_PATH="${projectOutPath}"
+                OUTPUT_ARG=""
+
+                show_help() {
+                  cat <<'HELP'
+        edit-${name} - Create a new secret interactively
+
+        USAGE
+            edit-${name} [OPTIONS]
+
+        DESCRIPTION
+            Opens $EDITOR to compose a new SOPS-encrypted secret for '${name}'.
+
+            The secret is encrypted using age keys defined in the flake configuration.
+
+        OPTIONS
+            --output <path>   Override output location. Can be:
+                              - A directory (appends expected filename)
+                              - A full file path (must match filename: ${fileName})
+                              Default: ${projectOutPath}
+
+            -h, --help        Show this help message.
+
+        EXAMPLES
+            # Open editor, save to default location
+            edit-${name}
+
+            # Override output directory
+            edit-${name} --output ./secrets/
+
+        NOTES
+            - The output directory must already exist
+            - Format: ${sopsFormat}
+            - Recipients: ${builtins.concatStringsSep ", " (builtins.attrNames config.recipients)}
+        HELP
+                }
+
+                # Parse arguments
+                while [[ $# -gt 0 ]]; do
+                  case "$1" in
+                    -h|--help)
+                      show_help
+                      exit 0
+                      ;;
+                    --output)
+                      OUTPUT_ARG="$2"
+                      shift 2
+                      ;;
+                    --output=*)
+                      OUTPUT_ARG="''${1#*=}"
+                      shift
+                      ;;
+                    *)
+                      echo "Error: Unknown argument: $1" >&2
+                      echo "Run with --help for usage information." >&2
+                      exit 1
+                      ;;
+                  esac
+                done
+
+                # Determine output path (default to project path)
+                if [[ -n "$OUTPUT_ARG" ]]; then
+                  if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
+                    OUTPUT_PATH="''${OUTPUT_ARG%/}/$EXPECTED_FILENAME"
+                  else
+                    GIVEN_FILENAME=$(basename "$OUTPUT_ARG")
+                    if [[ "$GIVEN_FILENAME" != "$EXPECTED_FILENAME" ]]; then
+                      echo "Error: Filename mismatch." >&2
+                      echo "  Expected: $EXPECTED_FILENAME" >&2
+                      echo "  Given:    $GIVEN_FILENAME" >&2
+                      echo "Hint: Use a directory path instead: --output $(dirname "$OUTPUT_ARG")/" >&2
+                      exit 1
+                    fi
+                    OUTPUT_PATH="$OUTPUT_ARG"
+                  fi
+                else
+                  OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
+                fi
+
+                # Validation for file output
+                OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+                if [[ ! -d "$OUTPUT_DIR" ]]; then
+                  echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
+                  exit 1
+                fi
+
+                # Create empty temp file for editor
+                TEMP_FILE=$(mktemp)
+                trap 'rm -f "$TEMP_FILE"' EXIT
+
+                # Open in editor
+                ''${EDITOR:-vi} "$TEMP_FILE"
+
+                # Check if user saved content
+                if [[ ! -s "$TEMP_FILE" ]]; then
+                  echo "Aborted: No content saved" >&2
+                  exit 1
+                fi
+
+                # Encrypt
+                if sops --config <(echo "$SOPS_CONFIG") \
+                     --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                     -e "$TEMP_FILE" > "$OUTPUT_PATH"; then
+                  echo "Created: $OUTPUT_PATH" >&2
+                else
+                  [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+                  echo "Error: Failed to encrypt secret" >&2
+                  exit 1
+                fi
+      '';
+    };
+
+  # ============================================================================
+  # EDIT OPERATION (EXISTING SECRET)
+  # Decrypts secret, opens in $EDITOR, re-encrypts result.
+  # Requires decryption key - for secrets that already exist.
+  # ============================================================================
+  mkEditExisting = {keyCmd ? null}: pkgs: let
     resolved = resolveKeyCmd pkgs keyCmd;
+    builtinKeyCmd =
+      if resolved.cmd != null
+      then "\"${resolved.cmd}\""
+      else "";
+    # Generate recipient env var examples for help text
+    recipientEnvExamples = lib.concatMapStringsSep "\n    " (rName: let
+      envName = toEnvVar rName;
+    in ''
+      ${secretEnvName}__${envName}__AGE_KEY_CMD   Secret-specific for ${rName}
+          ${envName}__AGE_KEY_CMD                 All secrets for ${rName}'')
+    recipientNamesList;
   in
     pkgs.writeShellApplication {
       name = "edit-${name}";
       runtimeInputs = [pkgs.sops] ++ (lib.optional (resolved.pkg != null) resolved.pkg);
       text = ''
-        ${sopsConfigSetup}
-        ${keyResolutionCode resolved.cmd}
+                ${sopsConfigSetup}
+                ${recipientEnvVarResolution}
 
-        if [[ ! -f "${storePath}" ]]; then
-          echo "Error: Secret '${name}' does not exist at ${storePath}. Create it with the init operation first." >&2
-          exit 1
-        fi
+                EXPECTED_FILENAME="${fileName}"
+                DEFAULT_OUTPUT_PATH="${projectOutPath}"
+                SECRET_PATH="${storePath}"
+                OUTPUT_ARG=""
+                BUILTIN_KEY_CMD=${builtinKeyCmd}
 
-        OUTPUT_PATH="./${fileName}"
+                show_help() {
+                  cat <<'HELP'
+        edit-${name} - Edit an existing secret interactively
 
-        # Decrypt to temp file
-        TEMP_FILE=$(mktemp)
-        trap 'rm -f "$TEMP_FILE"' EXIT
+        USAGE
+            edit-${name} [OPTIONS]
 
-        sops --config <(echo "$SOPS_CONFIG") \
-             --input-type ${sopsFormat} --output-type ${sopsFormat} \
-             -d "${storePath}" > "$TEMP_FILE"
+        DESCRIPTION
+            Decrypts the SOPS-encrypted secret '${name}', opens it in $EDITOR,
+            and re-encrypts the result.
 
-        # Open in editor
-        ''${EDITOR:-vi} "$TEMP_FILE"
+        OPTIONS
+            --output <path>   Override output location. Can be:
+                              - A directory (appends expected filename)
+                              - A full file path (must match filename: ${fileName})
+                              Default: ${projectOutPath}
 
-        # Re-encrypt
-        if sops --config <(echo "$SOPS_CONFIG") \
-             --input-type ${sopsFormat} --output-type ${sopsFormat} \
-             -e "$TEMP_FILE" > "$OUTPUT_PATH"; then
-          echo "Updated: $OUTPUT_PATH" >&2
-        else
-          echo "Error: Failed to re-encrypt secret" >&2
-          exit 1
-        fi
+            --sopsAgeKey <key>
+                              Use this age secret key directly for decryption.
+                              WARNING: Visible in process list. Prefer --sopsAgeKeyCmd.
+
+            --sopsAgeKeyFile <path>
+                              Read age secret key from this file.
+
+            --sopsAgeKeyCmd <cmd>
+                              Run this command to get the age secret key.
+
+            -h, --help        Show this help message.
+
+        EXAMPLES
+            # Edit secret, save to default location
+            edit-${name}
+
+            # Edit with specific key command
+            edit-${name} --sopsAgeKeyCmd "pass show age-key"
+
+            # Override output directory
+            edit-${name} --output ./secrets/
+
+        ENVIRONMENT
+            Recipient-specific env vars (for this secret's recipients):
+            ${recipientEnvExamples}
+
+            Global env vars:
+            SOPS_AGE_KEY          Age secret key (direct value)
+            SOPS_AGE_KEY_FILE     Path to age secret key file
+            SOPS_AGE_KEY_CMD      Command to retrieve age secret key
+
+        RECIPIENTS
+            ${builtins.concatStringsSep ", " recipientNamesList}
+
+        NOTES
+            - Format: ${sopsFormat}
+            - Source: ${storePath}
+        HELP
+                }
+
+                # Parse arguments
+                while [[ $# -gt 0 ]]; do
+                  case "$1" in
+                    -h|--help)
+                      show_help
+                      exit 0
+                      ;;
+                    --output)
+                      OUTPUT_ARG="$2"
+                      shift 2
+                      ;;
+                    --output=*)
+                      OUTPUT_ARG="''${1#*=}"
+                      shift
+                      ;;
+                    --sopsAgeKey)
+                      export SOPS_AGE_KEY="$2"
+                      shift 2
+                      ;;
+                    --sopsAgeKey=*)
+                      export SOPS_AGE_KEY="''${1#*=}"
+                      shift
+                      ;;
+                    --sopsAgeKeyFile)
+                      export SOPS_AGE_KEY_FILE="$2"
+                      shift 2
+                      ;;
+                    --sopsAgeKeyFile=*)
+                      export SOPS_AGE_KEY_FILE="''${1#*=}"
+                      shift
+                      ;;
+                    --sopsAgeKeyCmd)
+                      export SOPS_AGE_KEY_CMD="$2"
+                      shift 2
+                      ;;
+                    --sopsAgeKeyCmd=*)
+                      export SOPS_AGE_KEY_CMD="''${1#*=}"
+                      shift
+                      ;;
+                    *)
+                      echo "Error: Unknown argument: $1" >&2
+                      echo "Run with --help for usage information." >&2
+                      exit 1
+                      ;;
+                  esac
+                done
+
+                # Key resolution
+                if [[ -z "''${SOPS_AGE_KEY:-}" ]] && [[ -z "''${SOPS_AGE_KEY_FILE:-}" ]] && [[ -z "''${SOPS_AGE_KEY_CMD:-}" ]]; then
+                  if ! resolve_recipient_key; then
+                    if [[ -n "$BUILTIN_KEY_CMD" ]]; then
+                      export SOPS_AGE_KEY_CMD="$BUILTIN_KEY_CMD"
+                    fi
+                  fi
+                fi
+
+                # Determine output path (default to project path)
+                if [[ -n "$OUTPUT_ARG" ]]; then
+                  if [[ -d "$OUTPUT_ARG" ]] || [[ "$OUTPUT_ARG" == */ ]]; then
+                    OUTPUT_PATH="''${OUTPUT_ARG%/}/$EXPECTED_FILENAME"
+                  else
+                    GIVEN_FILENAME=$(basename "$OUTPUT_ARG")
+                    if [[ "$GIVEN_FILENAME" != "$EXPECTED_FILENAME" ]]; then
+                      echo "Error: Filename mismatch." >&2
+                      echo "  Expected: $EXPECTED_FILENAME" >&2
+                      echo "  Given:    $GIVEN_FILENAME" >&2
+                      echo "Hint: Use a directory path instead: --output $(dirname "$OUTPUT_ARG")/" >&2
+                      exit 1
+                    fi
+                    OUTPUT_PATH="$OUTPUT_ARG"
+                  fi
+                else
+                  OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
+                fi
+
+                # Validation for file output
+                OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+                if [[ ! -d "$OUTPUT_DIR" ]]; then
+                  echo "Error: Directory does not exist: $OUTPUT_DIR" >&2
+                  exit 1
+                fi
+
+                # Decrypt to temp file
+                TEMP_FILE=$(mktemp)
+                trap 'rm -f "$TEMP_FILE"' EXIT
+
+                sops --config <(echo "$SOPS_CONFIG") \
+                     --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                     -d "$SECRET_PATH" > "$TEMP_FILE"
+
+                # Open in editor
+                ''${EDITOR:-vi} "$TEMP_FILE"
+
+                # Re-encrypt
+                if sops --config <(echo "$SOPS_CONFIG") \
+                     --input-type ${sopsFormat} --output-type ${sopsFormat} \
+                     -e "$TEMP_FILE" > "$OUTPUT_PATH"; then
+                  echo "Updated: $OUTPUT_PATH" >&2
+                else
+                  [[ -f "$OUTPUT_PATH" ]] && rm -f "$OUTPUT_PATH"
+                  echo "Error: Failed to re-encrypt secret" >&2
+                  exit 1
+                fi
       '';
     };
 
@@ -1269,7 +1517,31 @@
           recipient = recipientPkgs;
         };
     });
-  editPkg = pkgs: mkBuilderPkg mkEdit {keyCmd = null;} pkgs;
+  # editPkg for existing secrets - has builder pattern and recipient packages
+  editExistingPkg = pkgs: let
+    basePkg = mkBuilderPkg mkEditExisting {keyCmd = null;} pkgs;
+    # Build recipient-specific edit packages for those with decryptPkg
+    recipientsWithDecrypt = lib.filterAttrs (_: r: r.decryptPkg != null) config.recipients;
+    recipientPkgs =
+      lib.mapAttrs (
+        _recipientName: recipient:
+          mkBuilderPkg mkEditExisting {
+            keyCmd = {
+              type = "build";
+              value = recipient.decryptPkg;
+            };
+          }
+          pkgs
+      )
+      recipientsWithDecrypt;
+  in
+    basePkg.overrideAttrs (old: {
+      passthru =
+        (old.passthru or {})
+        // {
+          recipient = recipientPkgs;
+        };
+    });
 
   rotatePkg = pkgs: let
     basePkg = mkBuilderPkg mkRotate {keyCmd = null;} pkgs;
@@ -1322,12 +1594,10 @@
     });
 
   # Conditional operation options based on whether secret exists
-  # When secret exists: decrypt, edit, rotate, rekey available
-  # When secret doesn't exist: only init available
   exists = config._exists;
 in {
   options =
-    # Operations available when secret EXISTS (decrypt, edit, rotate, rekey)
+    # Operations available when secret EXISTS (decrypt, rotate, rekey)
     lib.optionalAttrs exists {
       decrypt = mkOption {
         type = types.functionTo types.package;
@@ -1336,38 +1606,42 @@ in {
         description = "Decrypts secret from store and outputs to stdout. Supports builder methods: .withSopsAgeKeyCmd, .withSopsAgeKeyCmdPkg, .buildSopsAgeKeyCmdPkg";
       };
 
-      edit = mkOption {
-        type = types.functionTo types.package;
-        readOnly = true;
-        default = editPkg;
-        description = "Decrypts secret, opens in $EDITOR, re-encrypts to current directory. Supports builder methods.";
-      };
-
       rotate = mkOption {
         type = types.functionTo types.package;
         readOnly = true;
         default = rotatePkg;
-        description = "Accepts new content and encrypts to current directory. Supports builder methods.";
+        description = "Rotates the data encryption key (sops rotate). Content unchanged. Supports builder methods.";
       };
 
       rekey = mkOption {
         type = types.functionTo types.package;
         readOnly = true;
         default = rekeyPkg;
-        description = "Decrypts and re-encrypts with current recipients. Content unchanged. Supports builder methods.";
-      };
-    }
-    # Operation available when secret DOES NOT EXIST (init only)
-    // lib.optionalAttrs (!exists) {
-      init = mkOption {
-        type = types.functionTo types.package;
-        readOnly = true;
-        default = mkInit;
-        description = "Creates a new encrypted secret. Does not require decryption - only uses public keys.";
+        description = "Updates recipients to match current config (sops updatekeys). Data key unchanged. Supports builder methods.";
       };
     }
     # Operations available ALWAYS (regardless of secret existence)
     // {
+      encrypt = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default = mkEncrypt;
+        description = "Encrypts content from --input to a secret file. No decryption needed.";
+      };
+
+      edit = mkOption {
+        type = types.functionTo types.package;
+        readOnly = true;
+        default =
+          if exists
+          then editExistingPkg
+          else mkEditNew;
+        description =
+          if exists
+          then "Decrypts secret, opens in $EDITOR, re-encrypts. Supports builder methods."
+          else "Opens $EDITOR to create new secret. No decryption needed.";
+      };
+
       env = mkOption {
         type = types.functionTo types.package;
         readOnly = true;

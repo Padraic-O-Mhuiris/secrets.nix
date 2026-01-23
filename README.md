@@ -71,20 +71,33 @@ No `.sops.yaml` file needed - configuration is derived from your Nix expressions
 
 ## Operations
 
-### init - Create a new secret
+### encrypt - Encrypt content to a secret file
 
 ```bash
-# Interactive (opens $EDITOR)
-nix run .#secrets.api-key.init
-
 # From file (secure - content not in shell history)
-nix run .#secrets.api-key.init -- --input <(pass show my-api-key)
+nix run .#secrets.api-key.encrypt -- --input <(pass show my-api-key)
+
+# From a plaintext file
+nix run .#secrets.api-key.encrypt -- --input ./plaintext.txt
 
 # Override output location
-nix run .#secrets.api-key.init -- --output ./other-dir/
+nix run .#secrets.api-key.encrypt -- --input ./secret.txt --output ./other-dir/
 
 # See all options
-nix run .#secrets.api-key.init -- --help
+nix run .#secrets.api-key.encrypt -- --help
+```
+
+### edit - Create or modify a secret interactively
+
+```bash
+# Create new secret (opens empty $EDITOR)
+nix run .#secrets.new-secret.edit
+
+# Edit existing secret (decrypts, opens $EDITOR, re-encrypts)
+nix run .#secrets.api-key.edit.recipient.alice
+
+# See all options
+nix run .#secrets.api-key.edit -- --help
 ```
 
 ### decrypt - Decrypt a secret
@@ -107,21 +120,17 @@ nix run .#secrets.service-account.decrypt.recipient.alice | jq .field
 nix run .#secrets.api-key.decrypt -- --help
 ```
 
-### edit - Modify an existing secret
+### rotate - Rotate the data encryption key
 
 ```bash
-nix run .#secrets.api-key.edit.recipient.alice
+# Rotate data key (content unchanged)
+nix run .#secrets.api-key.rotate.recipient.alice
 ```
 
-### rotate - Replace secret content
+### rekey - Update recipients
 
 ```bash
-nix run .#secrets.api-key.rotate.recipient.alice -- --input <(pass show new-api-key)
-```
-
-### rekey - Re-encrypt with updated recipients
-
-```bash
+# Update recipients to match current config (after adding/removing recipients)
 nix run .#secrets.api-key.rekey.recipient.alice
 ```
 

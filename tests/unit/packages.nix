@@ -71,7 +71,7 @@ in {
     expected = "secret-api-key";
   };
 
-  testSecretPackageHasInitOperation = {
+  testSecretPackageHasEncryptOperation = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -81,7 +81,21 @@ in {
       };
       pkg = mkSecretsPackages secrets pkgs;
     in
-      pkg.test ? init;
+      pkg.test ? encrypt;
+    expected = true;
+  };
+
+  testSecretPackageHasEditOperation = {
+    expr = let
+      secrets = mkSecrets {
+        test = {
+          dir = nonexistentDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      pkg = mkSecretsPackages secrets pkgs;
+    in
+      pkg.test ? edit;
     expected = true;
   };
 
@@ -99,7 +113,7 @@ in {
     expected = true;
   };
 
-  testInitOperationIsDerivation = {
+  testEncryptOperationIsDerivation = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -109,11 +123,11 @@ in {
       };
       pkg = mkSecretsPackages secrets pkgs;
     in
-      pkg.test.init ? name && pkg.test.init ? drvPath;
+      pkg.test.encrypt ? name && pkg.test.encrypt ? drvPath;
     expected = true;
   };
 
-  testInitOperationHasCorrectName = {
+  testEncryptOperationHasCorrectName = {
     expr = let
       secrets = mkSecrets {
         my-secret = {
@@ -123,8 +137,22 @@ in {
       };
       pkg = mkSecretsPackages secrets pkgs;
     in
-      pkg.my-secret.init.name;
-    expected = "init-my-secret";
+      pkg.my-secret.encrypt.name;
+    expected = "encrypt-my-secret";
+  };
+
+  testEditOperationHasCorrectName = {
+    expr = let
+      secrets = mkSecrets {
+        my-secret = {
+          dir = nonexistentDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      pkg = mkSecretsPackages secrets pkgs;
+    in
+      pkg.my-secret.edit.name;
+    expected = "edit-my-secret";
   };
 
   testEnvOperationHasCorrectName = {
@@ -282,17 +310,19 @@ in {
       };
       pkg = mkSecretsPackages secrets pkgs;
     in {
-      initHasMainProgram = pkg.test.init ? meta && pkg.test.init.meta ? mainProgram;
+      encryptHasMainProgram = pkg.test.encrypt ? meta && pkg.test.encrypt.meta ? mainProgram;
+      editHasMainProgram = pkg.test.edit ? meta && pkg.test.edit.meta ? mainProgram;
       envHasMainProgram = pkg.test.env ? meta && pkg.test.env.meta ? mainProgram;
     };
     expected = {
-      initHasMainProgram = true;
+      encryptHasMainProgram = true;
+      editHasMainProgram = true;
       envHasMainProgram = true;
     };
   };
 
   # Drv construction tests
-  testDrvInitProducesDerivationWithCorrectName = {
+  testDrvEncryptProducesDerivationWithCorrectName = {
     expr = let
       secrets = mkSecrets {
         my-secret = {
@@ -300,10 +330,24 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      drv = secrets.my-secret.__operations.init pkgs;
+      drv = secrets.my-secret.__operations.encrypt pkgs;
     in
       drv.name;
-    expected = "init-my-secret";
+    expected = "encrypt-my-secret";
+  };
+
+  testDrvEditProducesDerivationWithCorrectName = {
+    expr = let
+      secrets = mkSecrets {
+        my-secret = {
+          dir = nonexistentDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+      drv = secrets.my-secret.__operations.edit pkgs;
+    in
+      drv.name;
+    expected = "edit-my-secret";
   };
 
   testDrvEnvProducesDerivationWithCorrectName = {
@@ -320,7 +364,7 @@ in {
     expected = "env-my-secret";
   };
 
-  testDrvInitIsShellApplication = {
+  testDrvEncryptIsShellApplication = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -328,13 +372,13 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      drv = secrets.test.__operations.init pkgs;
+      drv = secrets.test.__operations.encrypt pkgs;
     in
       drv ? meta && drv.meta ? mainProgram;
     expected = true;
   };
 
-  testDrvInitMainProgramMatchesName = {
+  testDrvEncryptMainProgramMatchesName = {
     expr = let
       secrets = mkSecrets {
         api-key = {
@@ -342,10 +386,10 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      drv = secrets.api-key.__operations.init pkgs;
+      drv = secrets.api-key.__operations.encrypt pkgs;
     in
       drv.meta.mainProgram;
-    expected = "init-api-key";
+    expected = "encrypt-api-key";
   };
 
   testDrvEnvMainProgramMatchesName = {
@@ -374,16 +418,16 @@ in {
           recipients.bob = {key = validAgeKey2;};
         };
       };
-      drv1 = secrets.secret1.__operations.init pkgs;
-      drv2 = secrets.secret2.__operations.init pkgs;
+      drv1 = secrets.secret1.__operations.encrypt pkgs;
+      drv2 = secrets.secret2.__operations.encrypt pkgs;
     in {
       name1 = drv1.name;
       name2 = drv2.name;
       different = drv1.name != drv2.name;
     };
     expected = {
-      name1 = "init-secret1";
-      name2 = "init-secret2";
+      name1 = "encrypt-secret1";
+      name2 = "encrypt-secret2";
       different = true;
     };
   };
@@ -396,14 +440,14 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      drv1 = secrets.test.__operations.init pkgs;
-      drv2 = secrets.test.__operations.init pkgs;
+      drv1 = secrets.test.__operations.encrypt pkgs;
+      drv2 = secrets.test.__operations.encrypt pkgs;
     in
       drv1.name == drv2.name;
     expected = true;
   };
 
-  testDrvFormatJsonSecretInitHasCorrectName = {
+  testDrvFormatJsonSecretEncryptHasCorrectName = {
     expr = let
       secrets = mkSecrets {
         config = {
@@ -412,13 +456,13 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      drv = secrets.config.__operations.init pkgs;
+      drv = secrets.config.__operations.encrypt pkgs;
     in
       drv.name;
-    expected = "init-config";
+    expected = "encrypt-config";
   };
 
-  testDrvFormatEnvSecretInitHasCorrectName = {
+  testDrvFormatEnvSecretEncryptHasCorrectName = {
     expr = let
       secrets = mkSecrets {
         dotenv = {
@@ -427,13 +471,13 @@ in {
           recipients.alice = {key = validAgeKey1;};
         };
       };
-      drv = secrets.dotenv.__operations.init pkgs;
+      drv = secrets.dotenv.__operations.encrypt pkgs;
     in
       drv.name;
-    expected = "init-dotenv";
+    expected = "encrypt-dotenv";
   };
 
-  testDrvMultiRecipientSecretProducesSingleInitDrv = {
+  testDrvMultiRecipientSecretProducesSingleEncryptDrv = {
     expr = let
       secrets = mkSecrets {
         shared = {
@@ -445,9 +489,9 @@ in {
           };
         };
       };
-      drv = secrets.shared.__operations.init pkgs;
+      drv = secrets.shared.__operations.encrypt pkgs;
     in
       drv.name;
-    expected = "init-shared";
+    expected = "encrypt-shared";
   };
 }
