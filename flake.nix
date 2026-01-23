@@ -81,9 +81,10 @@
       perSystem = {
         config,
         pkgs,
+        system,
         ...
       }: let
-        nix-unit = inputs.nix-unit.packages.${pkgs.system}.default;
+        nix-unit = inputs.nix-unit.packages.${system}.default;
         testsModule = import ./tests {
           inherit lib pkgs nix-unit;
           corePath = ./core;
