@@ -2,8 +2,9 @@
 #
 # Demonstrates how to use the secrets.nix flake module.
 {secretsDir}: let
-  # Example recipients with test keys
-  # In real usage, these would be actual age public keys
+  # TEST-ONLY KEYS. The private keys below are public knowledge (committed
+  # in plaintext) so the example secrets can be decrypted by anyone. Never
+  # encrypt real data to these recipients.
   recipients = {
     alice = {
       key = "age1yct6cdz4f2hguaamc0jqxjx0m00v2puqacx0339mutagv8xmpffqcxql4v";
