@@ -1,3 +1,10 @@
+> **Status: superseded design, kept for history.** The current API is in [../secret-api.md](../secret-api.md).
+>
+> - **Implemented, renamed:** `publicKey` → `recipients.<r>.key`; `decryption.cmd` + `decryption.packages` → `recipients.<r>.decryptPkg` (`pkgs -> derivation`, its main program is the key command); `<R>__DECRYPT_CMD` → `<R>__AGE_KEY_CMD` (plus `<R>__AGE_KEY` and `<R>__AGE_KEY_FILE`), with an extra secret-specific level `<SECRET>__<R>__AGE_KEY*`; `.<recipient>.decrypt` → `.decrypt.recipient.<r>`; env vars override the baked command; encrypted secret read from the store path.
+> - **Added since:** CLI flags `--sopsAgeKey*`, global `SOPS_AGE_KEY*`, Nix builders `.withSopsAgeKeyCmd`/`.withSopsAgeKeyCmdPkg`/`.buildSopsAgeKeyCmdPkg`, and the `env` template operation.
+> - **Dropped:** `flake.secrets.<group>` groups and per-secret `path`; trying every recipient — if variables for several recipients are set at one level the command fails instead; deriving the public key to identify the recipient before decrypting; unsetting decrypt env vars after use.
+> - **Open:** shared, reusable recipient definitions (#14).
+
 # Decryption Distribution Strategy
 
 ## The Problem

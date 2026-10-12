@@ -1,3 +1,10 @@
+> **Status: superseded design, kept for history.** The current API is in [../secret-api.md](../secret-api.md).
+>
+> - **Implemented, renamed:** `flake.sops.{keys,secrets}` → `secrets.<name> = { dir; format; recipients.<r>.key; }` (flake-parts module) or `lib.mkSecrets`; per-secret `mkNixosModule`; `mkHomeModule` → `mkHomeManagerModule`; plus `mkDarwinModule`; `edit` and `rekey` packages under `packages.secrets.<name>`; `show` → the `secrets.<name>` info package; formats `binary`/`dotenv` → `bin`/`env`; `edit` creates missing files; validation of names and recipients at evaluation.
+> - **Added since:** `encrypt`, `decrypt`, `rotate`, `env` operations; per-recipient key commands (`decryptPkg`) and env-var key resolution.
+> - **Dropped:** global `secretsDir`, `path`, `description` (replaced by per-secret `dir`); `adminKeySource` (replaced by key resolution, see secret-api.md); `ini` format; Terraform/Terranix integration; templating, secret dependencies.
+> - **Open:** key roles with auto-included admin/backup keys and shared recipient sets (#14); per-target grouped module constructors (#15); verify/status (#16); bulk operations, e.g. rotating a key across all secrets (#17); retiring a secret (#18).
+
 # SOPS Flake Module - Architecture Plan
 
 A flake-parts module for declarative SOPS secrets management with auto-generated NixOS/home-manager module constructors and CLI tooling.

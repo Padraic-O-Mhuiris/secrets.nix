@@ -2,28 +2,28 @@
 
 ## Project Overview
 
-This project provides a declarative secrets management solution using Nix flake-parts with SOPS as the encryption backend. The core design:
+Declarative SOPS/age secrets for Nix flakes. Each secret is declared in Nix with its own recipients, and every action on it (create, edit, decrypt, rotate, rekey) is a package generated from that declaration. See [secret-api.md](secret-api.md) for the reference.
 
 ```nix
-flake.secrets.<group> = {
+secrets.api-key = {
+  dir = ./secrets;
+  format = "json";
   recipients = {
-    admins = [ { name = "alice"; key = "age1..."; } ];  # Access to all secrets
-    targets = [ { name = "server1"; key = "age1..."; } ];  # Per-secret access
-  };
-  secret.apiKey = {
-    admins = ["alice"];      # Defaults to all admins
-    targets = ["server1"];   # Explicit selection, or ["*"] for all
+    alice.key = "age1...";
+    server1.key = "age1...";
   };
 };
 ```
 
-Key features:
+Current model:
 
-- **Admin/target separation** - Admins get all secrets by default (key rotation, management), targets are opt-in per-secret (principle of least privilege)
-- **Validation** - Target/admin names validated against defined recipients via `types.enum`
-- **Computed `_recipients`** - Automatically combines selected admins + targets
-- **Generated `_creationRule`** - SOPS-compatible YAML fragment per secret
-- **Group isolation** - Supports environment segregation (dev/staging/prod)
+- **Per-secret recipients** - each secret lists every age public key that can decrypt it; there are no roles or groups.
+- **Validation at evaluation** - names, env var collisions, age key format, at least one recipient.
+- **Generated sops config** - each operation carries a `.sops.yaml` built from the secret's recipients; none is kept in the repo.
+- **Operations as packages** - `packages.secrets.<name>.<op>`, with key commands configurable through env vars, CLI flags or Nix builders.
+- **sops-nix modules** - `mkNixosModule`, `mkHomeManagerModule`, `mkDarwinModule` per secret.
+
+Not built (tracked): shared recipient sets and automatic admin/backup recipients (#14), per-target grouped modules (#15). Earlier designs are in [design-history/](design-history/).
 
 ## How SOPS Works
 
@@ -44,16 +44,18 @@ database:
 
 ### Creation Rules
 
-The Nix config generates `.sops.yaml` rules like:
+Each operation passes sops a generated config (via `--config`) containing one key group with all of the secret's recipients:
 
 ```yaml
-- path_regex: secrets/example/apiKey\.yaml$
-  age:
-    - age1v9z267...  # alice (admin)
-    - age1dpnznv...  # server1 (target)
+creation_rules:
+  - path_regex: .*
+    key_groups:
+      - age:
+          - age1v9z267...  # alice
+          - age1dpnznv...  # server1
 ```
 
-SOPS uses these rules to determine which keys encrypt each file.
+SOPS uses this rule to determine which keys encrypt the file.
 
 ## Local vs Remote Key Schemes
 
@@ -69,27 +71,14 @@ SOPS uses these rules to determine which keys encrypt each file.
 
 Use both age (offline/backup) and KMS (primary) - SOPS encrypts the data key for all master keys.
 
-The design supports mixed key types:
-
-```nix
-recipients = {
-  admins = [
-    { name = "alice"; age = "age1..."; }
-    { name = "ci"; kms = "arn:aws:kms:..."; }
-  ];
-  targets = [
-    { name = "server1"; age = "age1..."; }
-    { name = "prod"; azureKeyvault = "https://vault.azure.net/keys/..."; }
-  ];
-};
-```
+Only age recipients are supported today (`recipients.<r>.type` is fixed to `"age"`). Mixed key types (KMS, Azure Key Vault, PGP) are future work.
 
 ## Industry Best Practices
 
 From OWASP, AWS, and enterprise guidance:
 
-1. **Principle of least privilege** - The admin/target split implements this
-2. **Environment segregation** - The `flake.secrets.<group>` structure supports this
+1. **Principle of least privilege** - Recipients are chosen per secret
+2. **Environment segregation** - Use separate secrets (and recipients) per environment; there is no group construct (#14)
 3. **Automated rotation** - Enterprise solutions rotate automatically; this solution requires manual re-encryption
 4. **Audit logging** - Git provides change history; KMS adds access logs
 5. **Key groups/threshold** - SOPS supports N-of-M keys via Shamir's Secret Sharing
@@ -122,16 +111,16 @@ Timeline:
 
 ### Compromise Scenarios
 
-**If an admin key is compromised:**
+**If a key on many secrets is compromised (e.g. a personal admin key):**
 
-- Attacker can decrypt ALL secrets in that group (current and historical)
-- Mitigation: Rotate all secrets, re-encrypt with new key, remove compromised key
-- Git history still contains old encrypted blobs decryptable with leaked key
+- Attacker can decrypt every secret that lists it (current and historical)
+- Mitigation: remove the key from the recipients, `rekey` and `rotate` affected secrets, and change the underlying secret values
+- Git history still contains old encrypted blobs decryptable with the leaked key
 
-**If a target key is compromised:**
+**If a key on few secrets is compromised (e.g. a host key):**
 
-- Attacker can decrypt only secrets that included that target
-- Blast radius limited by per-secret targeting
+- Attacker can decrypt only secrets that list that recipient
+- Blast radius limited by per-secret recipients
 - Still need to rotate affected secrets
 
 ### Key Concerns
@@ -171,10 +160,10 @@ agenix, sops-nix - the standard "encrypted secrets in git" model for NixOS
 ### Strengths
 
 - Declarative, version-controlled access policy
-- Clean admin/target separation with validation
+- Per-secret recipients, validated at evaluation
 - SOPS backend adds integrity (MAC) that raw age lacks
-- Group isolation for environment segregation
-- Generates `.sops.yaml` from Nix - single source of truth
+- `.sops.yaml` generated from Nix - single source of truth
+- Secret lifecycle actions are Nix-built packages
 
 ### Limitations (Inherent to the Model)
 
@@ -241,7 +230,7 @@ Keep secrets in the repo. Accept that:
 
 1. **Compromised key = rotate all affected secrets** - This is true regardless of where you store them
 2. **Git history is a risk** - But a manageable one with rotation discipline
-3. **KMS can reduce blast radius** - If you add KMS support later, the master key can't leak the same way an age key can
+3. **KMS can reduce blast radius** - If KMS support is added (not yet supported), the master key can't leak the same way an age key can
 
 The threat model is "known and accepted" rather than "alarming." sops-nix has thousands of users; if it were catastrophically insecure, we'd know by now.
 
@@ -252,6 +241,6 @@ Focus energy on:
 - **Not committing plaintext secrets** (pre-commit hooks, CI checks)
 - **Key hygiene** (don't share private keys over Slack)
 - **Rotation procedures** (documented runbook for when things go wrong)
-- **Least privilege** (the admin/target split handles this well)
+- **Least privilege** (list only the recipients that need each secret)
 
 The remote storage approach solves a theoretical problem while creating practical ones. Unless you have specific compliance requirements demanding it, keep it simple.
