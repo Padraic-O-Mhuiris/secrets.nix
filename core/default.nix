@@ -82,12 +82,15 @@
         type = types.str;
         readOnly = true;
         default = let
-          fullPath = builtins.toString config._path;
-          parts = lib.splitString "/" fullPath;
-          relativeParts = lib.drop 4 parts;
+          fullPath = toString config._path;
+          storePrefix = builtins.storeDir + "/";
+          # <hash>-source/<rest> -> <rest>
+          relativeParts = lib.drop 1 (lib.splitString "/" (lib.removePrefix storePrefix fullPath));
         in
-          "./" + lib.concatStringsSep "/" relativeParts;
-        description = "Relative path from flake root";
+          if lib.hasPrefix storePrefix fullPath
+          then "./" + lib.concatStringsSep "/" relativeParts
+          else fullPath;
+        description = "Path relative to the flake source root (./…), or the absolute path when dir is outside the Nix store";
       };
 
       _exists = mkOption {
@@ -138,16 +141,76 @@
       };
     };
   };
+
+  inherit (import ./names.nix {inherit lib;}) namePattern toEnvVar;
+
+  # Reserved names conflict with derivation attributes of the secrets package
+  reservedNames = [
+    "name"
+    "meta"
+    "passthru"
+    "text"
+    "type"
+    "out"
+    "outPath"
+    "drvPath"
+    "outputs"
+    "outputName"
+    "all"
+    "args"
+    "builder"
+    "system"
+    "overrideAttrs"
+    "inputDerivation"
+    "drvAttrs"
+  ];
+
+  # Names whose env var form collides, e.g. foo-bar and foo_bar
+  envCollisions = names: let
+    groups = lib.groupBy toEnvVar names;
+  in
+    lib.filter (g: builtins.length g > 1) (builtins.attrValues groups);
+
+  showCollisions = gs: lib.concatMapStringsSep "; " (lib.concatStringsSep " / ") gs;
+
+  # Check evaluated secrets; throws on the first problem, else returns them
+  validateSecrets = secrets: let
+    names = builtins.attrNames secrets;
+    badNames = lib.filter (n: builtins.match namePattern n == null) names;
+    reserved = lib.filter (n: builtins.elem n reservedNames) names;
+    secretCollisions = envCollisions names;
+    checkSecret = name: secret: let
+      rNames = builtins.attrNames secret.recipients;
+      badRecipients = lib.filter (n: builtins.match namePattern n == null) rNames;
+      rCollisions = envCollisions rNames;
+    in
+      if rNames == []
+      then throw "secrets.nix: secret '${name}' has no recipients; declare at least one in recipients"
+      else if badRecipients != []
+      then throw "secrets.nix: secret '${name}' has invalid recipient name(s): ${lib.concatStringsSep ", " badRecipients}. Names must match ${namePattern}"
+      else if rCollisions != []
+      then throw "secrets.nix: secret '${name}' has recipient names that map to the same environment variable: ${showCollisions rCollisions}"
+      else secret;
+  in
+    if badNames != []
+    then throw "secrets.nix: Invalid secret name(s): ${lib.concatStringsSep ", " badNames}. Names must match ${namePattern}"
+    else if reserved != []
+    then throw "secrets.nix: Invalid secret name(s): ${lib.concatStringsSep ", " reserved}. These names are reserved: ${lib.concatStringsSep ", " reservedNames}"
+    else if secretCollisions != []
+    then throw "secrets.nix: secret names that map to the same environment variable: ${showCollisions secretCollisions}"
+    else lib.mapAttrs checkSecret secrets;
 in {
-  # Evaluate a secrets configuration
+  inherit secretModule validateSecrets;
+
+  # Evaluate and validate a secrets configuration
   mkSecrets = secrets:
-    lib.mapAttrs (name: secretDef:
+    validateSecrets (lib.mapAttrs (name: secretDef:
       (lib.evalModules {
         modules = [secretModule {config = secretDef;}];
         specialArgs = {inherit name;};
       })
       .config)
-    secrets;
+    secrets);
 
   # Create a "secrets" package with nested passthru
   mkSecretsPackages = import ./packages.nix {inherit lib;};

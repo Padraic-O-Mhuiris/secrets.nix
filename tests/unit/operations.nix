@@ -1,6 +1,6 @@
 # Operations module tests (structure and availability)
 {ctx}: let
-  inherit (ctx) lib mkSecrets testDir validAgeKey1 validAgeKey2;
+  inherit (ctx) mkSecrets testDir validAgeKey1 validAgeKey2;
 
   # Common test secret config for nonexistent path
   nonexistentDir = /tmp/nonexistent-12345;
@@ -268,7 +268,8 @@ in {
     expected = true;
   };
 
-  testNumericSecretName = {
+  # Names become shell variable names, which cannot start with a digit
+  testNumericSecretNameRejected = {
     expr = let
       secrets = mkSecrets {
         "123" = {
@@ -278,7 +279,10 @@ in {
       };
     in
       builtins.hasAttr "123" secrets;
-    expected = true;
+    expectedError = {
+      type = "ThrownError";
+      msg = "Invalid secret name.*123";
+    };
   };
 
   testValidHyphenatedName = {
@@ -320,12 +324,7 @@ in {
     expected = true;
   };
 
-  testEnvVarNameDerivation = {
-    expr = lib.hasInfix "-" "api-key";
-    expected = true;
-  };
-
-  testEmptyRecipientsMapAllowed = {
+  testEmptyRecipientsRejected = {
     expr = let
       secrets = mkSecrets {
         test = {
@@ -334,11 +333,14 @@ in {
         };
       };
     in
-      builtins.attrNames secrets.test.recipients;
-    expected = [];
+      secrets.test.format;
+    expectedError = {
+      type = "ThrownError";
+      msg = "secret 'test' has no recipients";
+    };
   };
 
-  testSpecialCharsInSecretName = {
+  testSpecialCharsInSecretNameRejected = {
     expr = let
       secrets = mkSecrets {
         "test@123" = {
@@ -348,7 +350,64 @@ in {
       };
     in
       builtins.hasAttr "test@123" secrets;
-    expected = true;
+    expectedError = {
+      type = "ThrownError";
+      msg = "Invalid secret name.*test@123";
+    };
+  };
+
+  testInvalidRecipientNameRejected = {
+    expr = let
+      secrets = mkSecrets {
+        test = {
+          dir = testDir;
+          recipients."alice@home" = {key = validAgeKey1;};
+        };
+      };
+    in
+      secrets.test.format;
+    expectedError = {
+      type = "ThrownError";
+      msg = "invalid recipient name.*alice@home";
+    };
+  };
+
+  # foo-bar and foo_bar would share FOO_BAR__AGE_KEY
+  testRecipientEnvVarCollisionRejected = {
+    expr = let
+      secrets = mkSecrets {
+        test = {
+          dir = testDir;
+          recipients.foo-bar = {key = validAgeKey1;};
+          recipients.foo_bar = {key = validAgeKey2;};
+        };
+      };
+    in
+      secrets.test.format;
+    expectedError = {
+      type = "ThrownError";
+      msg = "same environment variable.*foo-bar / foo_bar";
+    };
+  };
+
+  testSecretEnvVarCollisionRejected = {
+    expr = let
+      secrets = mkSecrets {
+        "my.key" = {
+          dir = testDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+        my-key = {
+          dir = testDir;
+          recipients.alice = {key = validAgeKey1;};
+        };
+      };
+    in
+      builtins.attrNames secrets;
+    expectedError = {
+      type = "ThrownError";
+      msg = "same environment variable";
+    };
   };
 
   testVeryLongSecretName = {

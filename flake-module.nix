@@ -14,25 +14,25 @@
 #   };
 #
 # This exposes:
-#   - flake.secrets: evaluated secrets configuration (via mkSecrets)
+#   - flake.secrets: evaluated secrets configuration
 #   - perSystem.packages.secrets: per-system packages for secret operations
 {
   lib,
   config,
   ...
 }: let
-  inherit (import ./core {inherit lib;}) mkSecrets mkSecretsPackages;
+  inherit (import ./core {inherit lib;}) secretModule validateSecrets mkSecretsPackages;
   cfg = config.secrets;
   hasSecrets = cfg != {};
 in {
   options.secrets = lib.mkOption {
-    type = lib.types.attrs;
+    type = lib.types.attrsOf (lib.types.submodule secretModule);
     default = {};
-    description = "Secrets configuration passed to mkSecrets";
+    description = "Secrets, keyed by name. Definitions from several modules are merged.";
   };
 
   config = lib.mkIf hasSecrets {
-    flake.secrets = mkSecrets cfg;
+    flake.secrets = validateSecrets cfg;
 
     perSystem = {pkgs, ...}: {
       packages.secrets = mkSecretsPackages config.flake.secrets pkgs;

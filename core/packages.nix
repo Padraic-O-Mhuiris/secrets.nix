@@ -10,39 +10,9 @@
 #   secrets.<name>.rotate           # Rotate operation (only if exists)
 #   secrets.<name>.rekey            # Rekey operation (only if exists)
 #
+# Secrets must come from mkSecrets, which validates names.
 {lib}: secrets: pkgs: let
-  inherit (lib) mapAttrs attrNames concatStringsSep filterAttrs;
-
-  # Reserved names that cannot be used as secret names
-  # These conflict with derivation attributes or reserved sub-packages
-  reservedNames = [
-    # Common derivation attributes that would conflict with passthru
-    "name"
-    "meta"
-    "passthru"
-    "text"
-    "type"
-    "out"
-    "outPath"
-    "drvPath"
-    "outputs"
-    "outputName"
-    "all"
-    "args"
-    "builder"
-    "system"
-    "overrideAttrs"
-    "inputDerivation"
-    "drvAttrs"
-  ];
-
-  # Validate secret names
-  invalidNames = filterAttrs (name: _: builtins.elem name reservedNames) secrets;
-  invalidNamesList = attrNames invalidNames;
-  validatedSecrets =
-    if invalidNamesList != []
-    then throw "Invalid secret name(s): ${concatStringsSep ", " invalidNamesList}. These names are reserved: ${concatStringsSep ", " reservedNames}"
-    else secrets;
+  inherit (lib) mapAttrs attrNames concatStringsSep;
 
   # Get operation names for display
   operationNames = secret: attrNames secret.__operations;
@@ -83,12 +53,12 @@
     });
 
   # All secret packages
-  secretPackages = mapAttrs mkSecretPackage validatedSecrets;
-  secretNames = attrNames validatedSecrets;
+  secretPackages = mapAttrs mkSecretPackage secrets;
+  secretNames = attrNames secrets;
 
   # Collect all unique recipients across all secrets
   allRecipients = lib.unique (lib.flatten (
-    lib.mapAttrsToList (_: secret: attrNames secret.recipients) validatedSecrets
+    lib.mapAttrsToList (_: secret: attrNames secret.recipients) secrets
   ));
 
   # Top-level secrets package
