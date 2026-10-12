@@ -6,268 +6,259 @@ Declarative SOPS secrets management for Nix flakes.
 
 ## Overview
 
-secrets.nix provides a pure Nix approach to managing encrypted secrets using SOPS and age. Each secret is:
+secrets.nix turns a declaration of each secret (its recipients and format) into Nix constructions for its whole lifecycle:
 
-- Declared in your flake with explicit recipients
-- Stored as a single encrypted file (one file per secret)
-- Managed through generated shell scripts with full `--help` documentation
+- **Operations**: `encrypt`, `edit`, `decrypt`, `rotate`, `rekey` and `env` packages, each with `--help`
+- **Consumption**: `mkNixosModule`, `mkHomeManagerModule` and `mkDarwinModule` fragments for [sops-nix](https://github.com/Mic92/sops-nix)
 
-No `.sops.yaml` file needed - configuration is derived from your Nix expressions.
+Each secret is a single encrypted file. There is no `.sops.yaml`: each operation generates its SOPS configuration from the declaration.
 
 ## Quick Start
+
+### With flake-parts
 
 ```nix
 # flake.nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    secrets-nix.url = "github:your/secrets.nix";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    secrets-nix.url = "github:Padraic-O-Mhuiris/secrets.nix";
   };
 
-  outputs = { nixpkgs, secrets-nix, ... }: let
-    inherit (secrets-nix) mkSecrets mkSecretsPackages;
+  outputs = inputs @ {flake-parts, ...}:
+    flake-parts.lib.mkFlake {inherit inputs;} {
+      imports = [inputs.secrets-nix.flakeModule];
+      systems = ["x86_64-linux"];
 
-    recipients = {
-      alice = {
-        key = "age1abc...";  # alice's public key
-      };
-      bob = {
-        key = "age1xyz...";  # bob's public key
-      };
-      server1 = {
-        key = "age1srv...";  # server's public key
-        decryptPkg = pkgs: pkgs.writeShellScriptBin "get-server1-key" ''
-          ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i /etc/ssh/ssh_host_ed25519_key
-        '';
+      secrets = let
+        recipients = {
+          alice = {
+            key = "age1abc...";
+            decryptPkg = pkgs:
+              pkgs.writeShellScriptBin "get-alice-key" ''
+                ${pkgs.pass}/bin/pass show age/alice
+              '';
+          };
+          server1.key = "age1srv...";
+        };
+      in {
+        api-key = {
+          dir = ./secrets;
+          inherit recipients;
+          format = "json";
+        };
+        db-password = {
+          dir = ./secrets;
+          inherit recipients; # format defaults to "bin"
+        };
       };
     };
+}
+```
 
+The module exposes:
+
+- `flake.secrets.<name>`: the evaluated secret, including the module builders
+- `packages.<system>.secrets`: the operation packages, as `secrets.<name>.<operation>`
+
+`secrets` may be defined in several modules; the definitions are merged.
+
+### Without flake-parts
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    secrets-nix.url = "github:Padraic-O-Mhuiris/secrets.nix";
+  };
+
+  outputs = {nixpkgs, secrets-nix, ...}: let
+    inherit (secrets-nix.lib) mkSecrets mkSecretsPackages;
     secrets = mkSecrets {
       api-key = {
         dir = ./secrets;
-        inherit recipients;
-      };
-      db-password = {
-        dir = ./secrets;
-        inherit recipients;
-        format = "bin";  # default
-      };
-      service-account = {
-        dir = ./secrets;
-        inherit recipients;
+        recipients.alice.key = "age1abc...";
         format = "json";
       };
     };
   in {
-    packages.x86_64-linux = let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      secretsPkgs = mkSecretsPackages secrets pkgs;
-    in {
-      inherit secretsPkgs;
-    };
+    inherit secrets;
+    packages.x86_64-linux.secrets =
+      mkSecretsPackages secrets nixpkgs.legacyPackages.x86_64-linux;
   };
 }
 ```
 
+## Secret Definition
+
+| Option | Description |
+|--------|-------------|
+| `dir` | Directory holding the encrypted file. The file is `<dir>/<name><extension>`. |
+| `recipients.<name>.key` | The recipient's age public key. |
+| `recipients.<name>.decryptPkg` | Optional `pkgs: drv` whose program prints the recipient's private key. Enables `<operation>.recipient.<name>`. |
+| `format` | `bin` (default), `json`, `yaml` or `env`. |
+
+| Format | Extension | sops type |
+|--------|-----------|-----------|
+| `bin`  | (none)    | `binary`  |
+| `json` | `.json`   | `json`    |
+| `yaml` | `.yaml`   | `yaml`    |
+| `env`  | `.env`    | `dotenv`  |
+
+Declarations are validated at evaluation:
+
+- Secret and recipient names must match `[A-Za-z][A-Za-z0-9._-]*`. They become file, command and environment variable names.
+- Names must not collide once mapped to environment variables (`foo-bar` and `foo_bar` both become `FOO_BAR`).
+- Every secret needs at least one recipient.
+- Secret names must not be derivation attributes such as `name`, `meta`, `outPath` or `drvPath`.
+
 ## Operations
 
-### encrypt - Encrypt content to a secret file
+`nix run .#secrets` lists every secret and recipient; `nix run .#secrets.<name>` shows one secret.
+
+| Operation | Available | Needs private key |
+|-----------|-----------|-------------------|
+| `encrypt` | always | no |
+| `edit` | always (decrypts first if the secret exists) | if the secret exists |
+| `env` | always | no |
+| `decrypt` | once the secret exists | yes |
+| `rotate` | once the secret exists | yes |
+| `rekey` | once the secret exists | yes |
+
+A flake only sees files tracked by git, so a new secret counts as existing once it is `git add`ed.
+
+### encrypt: encrypt content to the secret file
 
 ```bash
-# From file (secure - content not in shell history)
+# From a command, without the plaintext touching disk or shell history
 nix run .#secrets.api-key.encrypt -- --input <(pass show my-api-key)
 
 # From a plaintext file
 nix run .#secrets.api-key.encrypt -- --input ./plaintext.txt
 
-# Override output location
-nix run .#secrets.api-key.encrypt -- --input ./secret.txt --output ./other-dir/
-
-# See all options
-nix run .#secrets.api-key.encrypt -- --help
+# Print the encrypted file instead of writing it
+nix run .#secrets.api-key.encrypt -- --input ./plaintext.txt --output /dev/stdout
 ```
 
-### edit - Create or modify a secret interactively
+### edit: create or modify a secret in $EDITOR
 
 ```bash
-# Create new secret (opens empty $EDITOR)
-nix run .#secrets.new-secret.edit
+# New secret: opens an empty editor
+nix run .#secrets.db-password.edit
 
-# Edit existing secret (decrypts, opens $EDITOR, re-encrypts)
+# Existing secret: decrypts, opens $EDITOR, re-encrypts if the content changed
 nix run .#secrets.api-key.edit.recipient.alice
-
-# See all options
-nix run .#secrets.api-key.edit -- --help
 ```
 
-### decrypt - Decrypt a secret
+### decrypt: print the plaintext
 
 ```bash
-# To stdout (default)
 nix run .#secrets.api-key.decrypt.recipient.alice
 
-# To file
-nix run .#secrets.api-key.decrypt.recipient.alice -- --output ./plaintext.txt
+# To a file (mode 0600)
+nix run .#secrets.api-key.decrypt.recipient.alice -- --output ./plaintext.json
 
-# With runtime key override
+# Key supplied at runtime
 nix run .#secrets.api-key.decrypt -- --sopsAgeKeyCmd "pass show age/alice"
-nix run .#secrets.api-key.decrypt -- --sopsAgeKeyFile ~/.config/sops/age/keys.txt
-
-# Pipe to other commands
-nix run .#secrets.service-account.decrypt.recipient.alice | jq .field
-
-# See all options
-nix run .#secrets.api-key.decrypt -- --help
 ```
 
-### rotate - Rotate the data encryption key
+The output is the plaintext byte for byte; pipe it to `jq` or `yq` for formatting.
+
+### rotate: new data key, same content
 
 ```bash
-# Rotate data key (content unchanged)
 nix run .#secrets.api-key.rotate.recipient.alice
 ```
 
-### rekey - Update recipients
+### rekey: update recipients to match the declaration
 
 ```bash
-# Update recipients to match current config (after adding/removing recipients)
+# After adding or removing recipients
 nix run .#secrets.api-key.rekey.recipient.alice
 ```
 
-## Recipient Configuration
+### env: print a key-configuration template
 
-Each recipient needs a public key. Optionally, provide a `decryptPkg` function to enable `decrypt.recipient.<name>`:
-
-```nix
-recipients = {
-  # Developer with decrypt capability
-  alice = {
-    key = "age1...";
-    decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
-      pass show age/alice
-    '';
-  };
-
-  # Deploy target (encrypt-only, no decryptPkg)
-  production = {
-    key = "age1...";
-  };
-};
+```bash
+nix run .#secrets.api-key.env -- --recipient alice >> .envrc.local
 ```
 
-## Formats
+### Where operations write
 
-Supported secret formats:
+`encrypt`, `edit`, `rotate` and `rekey` write the secret file:
 
-| Format | Extension | Use case |
-|--------|-----------|----------|
-| `bin`  | (none)    | Binary/text secrets (default) |
-| `json` | `.json`   | Structured JSON data |
-| `yaml` | `.yaml`   | Structured YAML data |
-| `env`  | `.env`    | Environment files |
+- **Default target**: the declared path, located from the root of the git repository you run the command in, so it works from any subdirectory. Outside a git repository, pass `--output`.
+- **`--output <dir>/`** or **`--output <path>/<expected filename>`** picks another location.
+- **Atomic**: output goes to a temporary file next to the target and replaces it only after the operation succeeds. A failed operation leaves the existing secret untouched.
+- **Guarded**: an existing default target that differs from the secret the command was evaluated from is not overwritten. That usually means you are in the wrong repository.
+- Secret files are written with mode `0644`.
 
-## Key Configuration
+## Consuming Secrets with sops-nix
 
-There are multiple ways to provide the age secret key for decryption, at both build time (Nix evaluation) and runtime (shell execution).
-
-### Build-time Configuration
-
-Configure the key source when building packages in your flake:
-
-#### 1. Per-recipient packages (recommended)
-
-Define `decryptPkg` in your recipients to get `decrypt.recipient.<name>`:
+Each evaluated secret provides module builders that set `sopsFile`, `format` and `key` for you:
 
 ```nix
-recipients = {
-  alice = {
-    key = "age1...";
-    decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
-      pass show age/alice
-    '';
-  };
-};
-
-# Then use:
-packages.decrypt-secret = secrets.api-key.decrypt.recipient.alice;
-```
-
-#### 2. Builder pattern
-
-Chain builder methods for one-off configurations:
-
-```nix
-{
-  # String command (executed at runtime)
-  my-decrypt = secrets.api-key.decrypt.withSopsAgeKeyCmd "pass show age/key";
-
-  # Pre-built package (must output key to stdout)
-  my-decrypt = secrets.api-key.decrypt.withSopsAgeKeyCmdPkg myKeyPkg;
-
-  # Build function (pkgs -> derivation)
-  my-decrypt = secrets.api-key.decrypt.buildSopsAgeKeyCmdPkg (pkgs:
-    pkgs.writeShellScriptBin "get-key" ''
-      ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
-    ''
-  );
+# A NixOS configuration (sops-nix's module must be imported too)
+{self, ...}: {
+  imports = [
+    (self.secrets.api-key.mkNixosModule {
+      owner = "nginx";
+      restartUnits = ["nginx.service"];
+    })
+  ];
 }
 ```
 
-### Runtime Configuration
+| Builder | Options |
+|---------|---------|
+| `mkNixosModule` | `path`, `mode`, `owner`, `uid`, `group`, `gid`, `restartUnits`, `reloadUnits`, `neededForUsers` |
+| `mkHomeManagerModule` | `path`, `mode` |
+| `mkDarwinModule` | `path`, `mode`, `owner`, `uid`, `group`, `gid`, `neededForUsers` |
 
-Override or provide key configuration when running the command:
+## Key Configuration
 
-#### 1. Command-line flags
+Operations that decrypt (`decrypt`, `edit` on an existing secret, `rotate`, `rekey`) need an age private key.
 
-```bash
-# Command that outputs the key (most secure)
-nix run .#secrets.api-key.decrypt -- --sopsAgeKeyCmd "pass show age/key"
+### Resolution order
 
-# Path to key file
-nix run .#secrets.api-key.decrypt -- --sopsAgeKeyFile ~/.config/sops/age/keys.txt
+First match wins:
 
-# Direct key value (visible in ps - use only for testing)
-nix run .#secrets.api-key.decrypt -- --sopsAgeKey "AGE-SECRET-KEY-1..."
+1. `--sopsAgeKey`, `--sopsAgeKeyFile` or `--sopsAgeKeyCmd`
+2. `<SECRET>__<RECIPIENT>__AGE_KEY[_FILE|_CMD]`: this secret only, e.g. `API_KEY__ALICE__AGE_KEY_CMD`
+3. `<RECIPIENT>__AGE_KEY[_FILE|_CMD]`: every secret for that recipient, e.g. `ALICE__AGE_KEY_CMD`
+4. `SOPS_AGE_KEY`, `SOPS_AGE_KEY_FILE` or `SOPS_AGE_KEY_CMD`
+5. The key command built into the package (`.recipient.<name>` or a builder method)
+
+Names map to variables by upper-casing and replacing `-` and `.` with `_`. At levels 2 and 3, only one recipient may be set; several is an error. `env` prints the variables for a secret.
+
+`--sopsAgeKey` and `SOPS_AGE_KEY` put the key in the process list or environment; prefer a command or file.
+
+### Built-in key commands
+
+`decryptPkg` on a recipient gives every decrypting operation a `.recipient.<name>` package. For one-off packages, chain a builder method:
+
+```nix
+let
+  secretsPkgs = mkSecretsPackages secrets pkgs; # or config.packages.secrets
+in {
+  # Command string, run by sops
+  decrypt-op = secretsPkgs.api-key.decrypt.withSopsAgeKeyCmd "op read op://vault/age-key/secret";
+
+  # Package whose main program prints the key
+  decrypt-pkg = secretsPkgs.api-key.decrypt.withSopsAgeKeyCmdPkg myKeyPkg;
+
+  # Function building that package from pkgs
+  decrypt-ssh = secretsPkgs.api-key.decrypt.buildSopsAgeKeyCmdPkg (pkgs:
+    pkgs.writeShellScriptBin "get-key" ''
+      ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i ~/.ssh/id_ed25519
+    '');
+}
 ```
 
-#### 2. Environment variables
+A key command must print the private key to stdout, write prompts and errors to stderr, and exit non-zero on failure.
 
-```bash
-# Command that outputs the key
-export SOPS_AGE_KEY_CMD="pass show age/key"
-nix run .#secrets.api-key.decrypt
-
-# Path to key file
-export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
-nix run .#secrets.api-key.decrypt
-
-# Direct key value
-export SOPS_AGE_KEY="AGE-SECRET-KEY-1..."
-nix run .#secrets.api-key.decrypt
-```
-
-#### 3. Using direnv
-
-Add to `.envrc` for automatic key configuration per-project:
-
-```bash
-# .envrc
-export SOPS_AGE_KEY_CMD="pass show age/myproject"
-```
-
-### Key Resolution Order
-
-When decrypting, keys are resolved in this order (first match wins):
-
-1. `--sopsAgeKey` flag
-2. `--sopsAgeKeyFile` flag
-3. `--sopsAgeKeyCmd` flag
-4. `SOPS_AGE_KEY` environment variable
-5. `SOPS_AGE_KEY_FILE` environment variable
-6. `SOPS_AGE_KEY_CMD` environment variable
-7. Build-time configured key (from `decryptPkg` or builder pattern)
-
-### Common Key Sources
+### Common key sources
 
 ```nix
 # Password store (pass)
@@ -277,7 +268,7 @@ decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
 
 # 1Password CLI
 decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
-  ${pkgs._1password}/bin/op read "op://vault/age-key/secret"
+  ${pkgs._1password-cli}/bin/op read "op://vault/age-key/secret"
 '';
 
 # SSH key via ssh-to-age
@@ -312,76 +303,39 @@ decryptPkg = pkgs: pkgs.writeShellScriptBin "get-key" ''
 '';
 ```
 
-## Project Structure
-
-```
-your-project/
-├── flake.nix          # Secret definitions
-└── secrets/
-    ├── api-key        # Encrypted secret (binary format)
-    ├── db-password    # Encrypted secret
-    └── service-account.json  # Encrypted secret (json format)
-```
-
 ## DevShell Integration
 
-Include secret management tools in your development shell:
-
 ```nix
-{
+perSystem = {config, pkgs, ...}: {
   devShells.default = pkgs.mkShell {
     packages = [
-      pkgs.sops
-      pkgs.age
-
-      # Include specific decrypt commands
-      secretsPkgs.api-key.decrypt.recipient.alice
-      secretsPkgs.db-password.decrypt.recipient.alice
-
-      # Or create a wrapper with all operations for a recipient
-      (pkgs.symlinkJoin {
-        name = "secrets-alice";
-        paths = [
-          secretsPkgs.api-key.decrypt.recipient.alice
-          secretsPkgs.api-key.edit.recipient.alice
-          secretsPkgs.api-key.rotate.recipient.alice
-          secretsPkgs.db-password.decrypt.recipient.alice
-        ];
-      })
+      config.packages.secrets.api-key.decrypt.recipient.alice
+      config.packages.secrets.api-key.edit.recipient.alice
     ];
-
-    # Or configure via environment
-    shellHook = ''
-      export SOPS_AGE_KEY_CMD="pass show age/alice"
-    '';
   };
-}
+};
 ```
 
-Then in your shell:
+The commands are named `<operation>-<secret>`:
 
 ```bash
-# Decrypt directly
-decrypt-api-key
-
-# Use in scripts
 API_KEY=$(decrypt-api-key)
-curl -H "Authorization: Bearer $API_KEY" https://api.example.com
-
-# Edit a secret
 edit-api-key
 ```
 
-## Future Work
+## Development
 
-- Additional SOPS key types:
-  - GPG keys
-  - AWS KMS
-  - GCP KMS
-  - Azure Key Vault
-  - HashiCorp Vault Transit
-- sopsnix/agenix integration
-- flake-parts module
+```bash
+nix flake check      # unit tests, end-to-end tests against sops, lints
+nix run .#unit-tests
+nix fmt
+```
+
+The example secrets in `examples/` use test-only keys whose private halves are committed.
+
+## Roadmap
+
+Planned lifecycle work is tracked in [issue #20](https://github.com/Padraic-O-Mhuiris/secrets.nix/issues/20), including shared recipient sets with admin and backup keys, grouped modules per host, verify, bulk operations and retiring secrets. Further SOPS key types (GPG, cloud KMS, Vault Transit) are not planned yet.
 
 ## Links
 
