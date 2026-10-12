@@ -4,149 +4,92 @@
 {
   lib,
   name,
-  config,
   ops,
+  ...
 }: pkgs: let
-  recipientNames = builtins.attrNames config.recipients;
-  recipientEnvNames = map ops.toEnvVar recipientNames;
+  inherit (ops) recipientNamesList secretEnvName toEnvVar;
+
+  recipientVars = r: ''
+    # --- Secret-specific (${name} + ${r}) ---
+    # ${secretEnvName}__${toEnvVar r}__AGE_KEY=""
+    # ${secretEnvName}__${toEnvVar r}__AGE_KEY_FILE=""
+    # ${secretEnvName}__${toEnvVar r}__AGE_KEY_CMD=""
+
+    # --- Recipient-level (${r}, all secrets) ---
+    # ${toEnvVar r}__AGE_KEY=""
+    # ${toEnvVar r}__AGE_KEY_FILE=""
+    # ${toEnvVar r}__AGE_KEY_CMD=""
+  '';
+
+  header = ''
+    #
+    # Resolution order (first match wins):
+    #   1. CLI flags (--sopsAgeKey, --sopsAgeKeyFile, --sopsAgeKeyCmd)
+    #   2. Secret-specific recipient vars (${secretEnvName}__<RECIPIENT>__AGE_KEY*)
+    #   3. Recipient-level vars (<RECIPIENT>__AGE_KEY*)
+    #   4. Global SOPS vars (SOPS_AGE_KEY*)
+    #   5. Builder-configured key command (if any)
+    #
+  '';
+
+  globalVars = ''
+    # --- Global (any secret, any recipient) ---
+    # SOPS_AGE_KEY=""
+    # SOPS_AGE_KEY_FILE=""
+    # SOPS_AGE_KEY_CMD=""
+  '';
+
+  allTemplate = pkgs.writeText "env-${name}-all" (lib.concatStringsSep "\n" ([
+      "# Environment variables for decrypting '${name}'"
+      header
+      "# Recipients: ${lib.concatStringsSep ", " recipientNamesList}\n#\n"
+    ]
+    ++ map recipientVars recipientNamesList
+    ++ [globalVars]));
+
+  recipientTemplate = r:
+    pkgs.writeText "env-${name}-${r}" (lib.concatStringsSep "\n" [
+      "# Environment variables for decrypting '${name}' as recipient '${r}'"
+      header
+      (recipientVars r)
+      globalVars
+    ]);
 in
-  pkgs.writeShellApplication {
-    name = "env-${name}";
-    text = ''
-      RECIPIENT=""
-
-      show_help() {
-        cat <<'HELP'
-      env-${name} - Output environment variable template for decryption
-
-      USAGE
-          env-${name} [OPTIONS]
-
-      DESCRIPTION
-          Outputs commented environment variable assignments that can be used
-          to configure decryption keys for the '${name}' secret.
-
-          Pipe or redirect to a file, then uncomment and configure your recipient.
-
-      OPTIONS
-          --recipient <name>    Filter output to a specific recipient
-          -h, --help            Show this help message
-
-      RECIPIENTS
-          ${builtins.concatStringsSep ", " recipientNames}
-
-      EXAMPLES
-          # Output all env vars for this secret
-          env-${name}
-
-          # Output env vars for specific recipient
-          env-${name} --recipient alice
-
-          # Append to an env file
-          env-${name} --recipient alice >> .envrc.secret
-
-      HELP
+  ops.mkOperation {
+    inherit pkgs;
+    op = "env";
+    summary = "Output environment variable template for decryption";
+    description = ''
+      Outputs commented environment variable assignments that configure
+      decryption keys for the '${name}' secret. Redirect to a file, then
+      uncomment and fill in your recipient.'';
+    options = [
+      {
+        flag = "--recipient";
+        metavar = "<name>";
+        var = "RECIPIENT";
+        help = "Only output variables for this recipient (${lib.concatStringsSep ", " recipientNamesList}).";
       }
+    ];
+    examples = ''
+      # Output all env vars for this secret
+      env-${name}
 
-      output_header() {
-        if [[ -n "$RECIPIENT" ]]; then
-          echo "# Environment variables for decrypting '${name}' as recipient '$RECIPIENT'"
-        else
-          echo "# Environment variables for decrypting '${name}'"
-        fi
-        echo "#"
-        echo "# Resolution order (first match wins):"
-        echo "#   1. CLI flags (--sopsAgeKey, --sopsAgeKeyFile, --sopsAgeKeyCmd)"
-        echo "#   2. Secret-specific recipient vars (${ops.secretEnvName}__<RECIPIENT>__AGE_KEY*)"
-        echo "#   3. Recipient-level vars (<RECIPIENT>__AGE_KEY*)"
-        echo "#   4. Global SOPS vars (SOPS_AGE_KEY*)"
-        echo "#   5. Builder-configured key command (if any)"
-        echo "#"
-        if [[ -z "$RECIPIENT" ]]; then
-          echo "# Recipients: ${builtins.concatStringsSep ", " recipientNames}"
-          echo "#"
-        fi
-        echo ""
-      }
-
-      output_recipient_vars() {
-        local r="$1"
-        local r_env="$2"
-
-        echo "# --- Secret-specific (${name} + $r) ---"
-        echo "# ${ops.secretEnvName}__''${r_env}__AGE_KEY=\"\""
-        echo "# ${ops.secretEnvName}__''${r_env}__AGE_KEY_FILE=\"\""
-        echo "# ${ops.secretEnvName}__''${r_env}__AGE_KEY_CMD=\"\""
-        echo ""
-        echo "# --- Recipient-level ($r, all secrets) ---"
-        echo "# ''${r_env}__AGE_KEY=\"\""
-        echo "# ''${r_env}__AGE_KEY_FILE=\"\""
-        echo "# ''${r_env}__AGE_KEY_CMD=\"\""
-        echo ""
-      }
-
-      output_global_vars() {
-        echo "# --- Global (any secret, any recipient) ---"
-        echo "# SOPS_AGE_KEY=\"\""
-        echo "# SOPS_AGE_KEY_FILE=\"\""
-        echo "# SOPS_AGE_KEY_CMD=\"\""
-      }
-
-      # Parse arguments
-      while [[ $# -gt 0 ]]; do
-        case "$1" in
-          -h|--help)
-            show_help
-            exit 0
-            ;;
-          --recipient)
-            RECIPIENT="$2"
-            shift 2
-            ;;
-          --recipient=*)
-            RECIPIENT="''${1#*=}"
-            shift
-            ;;
-          *)
-            echo "Error: Unknown argument: $1" >&2
-            echo "Run with --help for usage information." >&2
-            exit 1
-            ;;
-        esac
-      done
-
-      # Validate recipient if specified
-      if [[ -n "$RECIPIENT" ]]; then
-        case "$RECIPIENT" in
-          ${builtins.concatStringsSep "|" recipientNames})
-            ;;
-          *)
-            echo "Error: Unknown recipient: $RECIPIENT" >&2
-            echo "Valid recipients: ${builtins.concatStringsSep ", " recipientNames}" >&2
-            exit 1
-            ;;
-        esac
-      fi
-
-      output_header
-
-      if [[ -n "$RECIPIENT" ]]; then
-        # Output for specific recipient
-        case "$RECIPIENT" in
-          ${builtins.concatStringsSep "\n          " (lib.zipListsWith (r: rEnv: ''          ${r})
-                output_recipient_vars "${r}" "${rEnv}"
-                ;;'')
-        recipientNames
-        recipientEnvNames)}
-        esac
-      else
-        # Output for all recipients
-        ${builtins.concatStringsSep "\n        " (lib.zipListsWith (r: rEnv: ''
-          output_recipient_vars "${r}" "${rEnv}"'')
-        recipientNames
-        recipientEnvNames)}
-      fi
-
-      output_global_vars
+      # Append one recipient's vars to an env file
+      env-${name} --recipient ${lib.head recipientNamesList} >> .envrc.local'';
+    body = ''
+      case "$RECIPIENT" in
+        "")
+          cat ${allTemplate}
+          ;;
+        ${lib.concatMapStringsSep "\n" (r: ''
+        ${lib.escapeShellArg r})
+          cat ${recipientTemplate r}
+          ;;'')
+      recipientNamesList}
+        *)
+          die "unknown recipient: $RECIPIENT (valid: ${lib.concatStringsSep ", " recipientNamesList})"
+          ;;
+      esac
     '';
   }

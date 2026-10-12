@@ -2,8 +2,11 @@
 {
   inputs,
   lib,
+  config,
   ...
-}: {
+}: let
+  flakeSecrets = config.flake.secrets;
+in {
   imports = [
     inputs.git-hooks.flakeModule
     ../flake-module.nix
@@ -45,6 +48,12 @@
     checks =
       testsModule.checks
       // {
+        e2e = import ../tests/e2e.nix {
+          inherit lib pkgs;
+          core = import ../core {inherit lib;};
+          secretsPkg = config.packages.secrets;
+          secrets = flakeSecrets;
+        };
         lint-statix =
           pkgs.runCommand "lint-statix" {
             nativeBuildInputs = [pkgs.statix];
